@@ -22,7 +22,7 @@ MANAGED_BASE_PATH="$HOME/apps/managed_stacks"
 # List of essential Docker Compose project names
 essential_apps=(
     "zoraxy"
-    "wud"
+    "watchtower"
     "homepage"
     "portainer"
     "dockge"
@@ -46,6 +46,10 @@ all_selectable_apps=(
     "ollama"
     "emulatorjs"
     "jdownloader-2"
+    "adguardhome"
+    "sillytavern"
+    "textgen"
+    "i2p"
 )
 
 # List of apps to be selected by default when starting
