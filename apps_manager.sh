@@ -186,36 +186,40 @@ show_selection_menu() {
 
 show_status() {
     clear
-    log "Generating App Status Overview" "${C_BLUE}================ App Status Overview ================${C_RESET}"
-    declare -A running_projects
-    while read -r proj; do [[ -n "$proj" ]] && running_projects["$proj"]=1; done < <(docker compose ls --quiet)
+    log "Generating App Status Overview" "${C_BLUE}Displaying App Status Overview...${C_RESET}"
+    ( # Start of output group to be piped to 'less'
+        declare -A running_projects
+        while read -r proj; do [[ -n "$proj" ]] && running_projects["$proj"]=1; done < <(docker compose ls --quiet)
 
-    echo -e "\n${C_YELLOW}--- Essential Apps (${APPS_BASE_PATH}) ---${C_RESET}"
-    local -a essential_apps
-    discover_apps "$APPS_BASE_PATH" essential_apps
-    if [ ${#essential_apps[@]} -eq 0 ]; then
-        echo "No essential apps found."
-    else
-        for app in "${essential_apps[@]}"; do
-            if [ "$app" != "$MANAGED_SUBDIR" ]; then
+        echo -e "================ App Status Overview ================\n"
+
+        echo -e "${C_YELLOW}--- Essential Apps (${APPS_BASE_PATH}) ---${C_RESET}"
+        local -a essential_apps
+        discover_apps "$APPS_BASE_PATH" essential_apps
+        if [ ${#essential_apps[@]} -eq 0 ]; then
+            echo "No essential apps found."
+        else
+            for app in "${essential_apps[@]}"; do
+                if [ "$app" != "$MANAGED_SUBDIR" ]; then
+                    if [[ -v running_projects[$app] ]]; then echo -e " ${C_GREEN}[RUNNING]${C_RESET}\t$app"; else echo -e " ${C_RED}[STOPPED]${C_RESET}\t$app"; fi
+                fi
+            done
+        fi
+
+        echo -e "\n${C_YELLOW}--- Managed Apps (${MANAGED_SUBDIR}) ---${C_RESET}"
+        local -a managed_apps
+        local managed_path="$APPS_BASE_PATH/$MANAGED_SUBDIR"
+        discover_apps "$managed_path" managed_apps
+        if [ ${#managed_apps[@]} -eq 0 ]; then
+            echo "No managed apps found."
+        else
+            for app in "${managed_apps[@]}"; do
                 if [[ -v running_projects[$app] ]]; then echo -e " ${C_GREEN}[RUNNING]${C_RESET}\t$app"; else echo -e " ${C_RED}[STOPPED]${C_RESET}\t$app"; fi
-            fi
-        done
-    fi
-
-    echo -e "\n${C_YELLOW}--- Managed Apps (${MANAGED_SUBDIR}) ---${C_RESET}"
-    local -a managed_apps
-    local managed_path="$APPS_BASE_PATH/$MANAGED_SUBDIR"
-    discover_apps "$managed_path" managed_apps
-    if [ ${#managed_apps[@]} -eq 0 ]; then
-        echo "No managed apps found."
-    else
-        for app in "${managed_apps[@]}"; do
-            if [[ -v running_projects[$app] ]]; then echo -e " ${C_GREEN}[RUNNING]${C_RESET}\t$app"; else echo -e " ${C_RED}[STOPPED]${C_RESET}\t$app"; fi
-        done
-    fi
-    echo -e "\n${C_BLUE}====================================================${C_RESET}"
-    read -rp "Press Enter to return to the main menu..."
+            done
+        fi
+        echo -e "\n===================================================="
+        echo -e "\n${C_BLUE}(Scroll with arrow keys, press 'q' to return to menu)${C_RESET}"
+    ) | less -RFX
 }
 
 handle_action() {
