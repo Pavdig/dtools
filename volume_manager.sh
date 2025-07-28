@@ -26,28 +26,11 @@ TICKMARK=$'\033[0;32m\xE2\x9C\x93' # GREEN ✓
 if [[ -n "${SUDO_USER-}" ]]; then
     CURRENT_USER="${SUDO_USER}"
 else
+    # Failsafe if not run with sudo, though backup_main requires it.
     CURRENT_USER="${USER:-$(whoami)}"
 fi
 
-# --- Script Default Variables ---
-
-# Default backup location using the detected user's home directory.
-defaultBackupDir="/home/${CURRENT_USER}/backups/volume-backups/$(date +'%Y-%m-%d_%H-%M-%S')/"
-
-# Default restore location using the detected user's home directory.
-defaultRestoreDir="/home/${CURRENT_USER}/backups/restore-folder"
-
-# List of Docker volumes to ignore during backup.
-ignoreVolumes=(
-        "immich_model-cache"
-        "ollama_data"
-        "languagetool_ngrams"
-)
-
-# Docker image for backup and restore tasks
-DOCKER_IMAGE="docker/alpine-tar-zstd:latest"
-
-# --- Helper Functions ---
+# --- Helper Functions (Moved to the top) ---
 
 # Function to clear the terminal and display a welcome message
 welcome_message() {
@@ -84,6 +67,111 @@ ensure_docker_image() {
     fi
     echo -e "-> Image OK.\n"
 }
+
+# --- User Configuration ---
+
+# Define path for the configuration file within the user's home directory.
+CONFIG_DIR="/home/${CURRENT_USER}/.config/volume_manager"
+CONFIG_FILE="${CONFIG_DIR}/config.conf"
+
+# Function to run the first-time setup
+initial_setup() {
+    welcome_message
+    echo -e "${BLUE}##############################################${NOCOLOR}"
+    echo -e "${BLUE}#    ${YELLOW}Welcome to the Volume Manager Setup!    ${BLUE}#${NOCOLOR}"
+    echo -e "${BLUE}##############################################${NOCOLOR}\n"
+    echo -e "It looks like this is your first time running this script."
+    echo -e "We need to configure the default locations for your backups and restores."
+    echo -e "These settings will be saved to: ${GREEN}${CONFIG_FILE}${NOCOLOR}\n"
+
+    local backup_path_def="/home/${CURRENT_USER}/backups/volume-backups"
+    local restore_path_def="/home/${CURRENT_USER}/backups/restore-folder"
+    local backup_location
+    local restore_location
+
+    # Prompt for backup location
+    echo -e "${YELLOW}Step 1: Set Default Backup Path${NOCOLOR}"
+    echo -e "This is the main folder where timestamped backup directories will be created."
+    read -p "Enter path [${GREEN}${backup_path_def}${NOCOLOR}]: " backup_location
+    BACKUP_LOCATION=${backup_location:-$backup_path_def}
+    
+    echo "" # Add a newline for spacing
+
+    # Prompt for restore location
+    echo -e "${YELLOW}Step 2: Set Default Restore Path${NOCOLOR}"
+    echo -e "This is the folder the script will search for archives when you run a restore."
+    read -p "Enter path [${GREEN}${restore_path_def}${NOCOLOR}]: " restore_location
+    RESTORE_LOCATION=${restore_location:-$restore_path_def}
+
+    # Confirmation
+    welcome_message
+    echo -e "${YELLOW}--- Configuration Summary ---${NOCOLOR}"
+    echo -e "Please review the settings before saving:\n"
+    echo -e "  ${BLUE}Default Backup Location:${NOCOLOR}  ${GREEN}${BACKUP_LOCATION}${NOCOLOR}"
+    echo -e "  ${BLUE}Default Restore Location:${NOCOLOR} ${GREEN}${RESTORE_LOCATION}${NOCOLOR}"
+    echo -e "  ${BLUE}Config File will be saved to:${NOCOLOR} ${GREEN}${CONFIG_FILE}${NOCOLOR}\n"
+    
+    read -p "Save this configuration? (Y/n): " confirm_setup
+    confirm_setup=$(echo "${confirm_setup:-y}" | tr '[:upper:]' '[:lower:]')
+
+    if [[ "$confirm_setup" == "y" || "$confirm_setup" == "yes" ]]; then
+        echo -e "\n${GREEN}Saving configuration...${NOCOLOR}"
+        mkdir -p "${CONFIG_DIR}"
+        
+        # Write configuration to file
+        tee "${CONFIG_FILE}" > /dev/null << EOF
+# Default backup location. A timestamped sub-directory will be created inside this path.
+BACKUP_LOCATION="${BACKUP_LOCATION}"
+
+# Default directory to look for backups to restore.
+RESTORE_LOCATION="${RESTORE_LOCATION}"
+EOF
+
+        # Ensure the user owns the config directory and their specified default paths
+        echo -e "${YELLOW}Setting permissions for configuration and default directories...${NOCOLOR}"
+        chown -R "${CURRENT_USER}:${CURRENT_USER}" "/home/${CURRENT_USER}/.config"
+        mkdir -p "$BACKUP_LOCATION" "$RESTORE_LOCATION"
+        chown -R "${CURRENT_USER}:${CURRENT_USER}" "$BACKUP_LOCATION" "$RESTORE_LOCATION"
+    
+        echo -e "${GREEN}${TICKMARK} Setup complete! The script will now continue.${NOCOLOR}\n"
+        sleep 2
+    else
+        echo -e "\n${RED}Setup canceled. Please run the script again to configure it.${NOCOLOR}"
+        exit 0
+    fi
+}
+
+# Check if config file exists, if not, run setup.
+if [[ ! -f "${CONFIG_FILE}" ]]; then
+    # backup_main checks for root, but setup must run with sudo to set permissions
+    if [[ $EUID -ne 0 ]]; then
+       echo -e "${RED}This script must be run with 'sudo' for the initial setup to create directories and set permissions.${NOCOLOR}"
+       exit 1
+    fi
+    initial_setup
+fi
+
+# Load variables from config file
+source "${CONFIG_FILE}"
+
+# --- Script Default Variables ---
+
+# Default backup location using the config file, with a timestamped sub-directory.
+defaultBackupDir="${BACKUP_LOCATION%/}/$(date +'%Y-%m-%d_%H-%M-%S')/"
+
+# Default restore location from the config file.
+defaultRestoreDir="${RESTORE_LOCATION%/}"
+
+# List of Docker volumes to ignore during backup.
+ignoreVolumes=(
+        "immich_model-cache"
+        "ollama_data"
+        "languagetool_ngrams"
+)
+
+# Docker image for backup and restore tasks
+DOCKER_IMAGE="docker/alpine-tar-zstd:latest"
+
 
 # --- Backup Functions ---
 
@@ -241,12 +329,13 @@ backup_main() {
             echo -e "${YELLOW}Backup of ${BLUE}$volume ${YELLOW}created successfully.${NOCOLOR}"
             ((currentVolumeIndex++))
         done
+        # Set permissions on the backup directory
         if [[ -n "$SUDO_USER" ]]; then
-            echo -e "${YELLOW}Changing ownership of backup files to user '$SUDO_USER'...${NOCOLOR}"
-            chown -R "$SUDO_USER:$SUDO_GID" "$backupDir"
+            echo -e "${YELLOW}Changing ownership of backup files to user '${SUDO_USER}'...${NOCOLOR}"
+            # Use id -gn for robust group lookup, and apply to the whole created path
+            chown -R "$SUDO_USER:$(id -gn "$SUDO_USER")" "$backupDir"
         else
-            echo -e "${YELLOW}WARNING: SUDO_USER not set. Applying broad permissions (777).${NOCOLOR}"
-            chmod -R 777 "$backupDir"
+            echo -e "${YELLOW}WARNING: SUDO_USER not set. Not changing ownership.${NOCOLOR}"
         fi
         echo -e "${BLUE}Saved file location:\n${YELLOW}$backupDir${NOCOLOR}\n"
     else
@@ -268,7 +357,8 @@ restore_main() {
     while [ ${#backupFiles[@]} -eq 0 ]; do
         echo -e "${YELLOW}The current restore directory is set to: '${GREEN}$defaultRestoreDir${YELLOW}'.${NOCOLOR}"
         read -p "Type ('yes'/'y') to change it or press 'Enter' to skip: " changeDir
-        if [[ "$changeDir" =~ ^(y|yes)$ ]]; then
+        changeDir=$(echo "$changeDir" | tr '[:upper:]' '[:lower:]')
+        if [[ "$changeDir" == "yes" || "$changeDir" == "y" ]]; then
             while true; do
                 echo -e "\n${YELLOW}Please enter the full path to the restore directory.${NOCOLOR}"
                 read -p "Path: " userBackupDir
@@ -300,8 +390,9 @@ restore_main() {
     done
     echo -e "\n${RED}This will overwrite existing data in volumes with the same name!${NOCOLOR}"
     read -p "Are you sure you want to restore these volumes? (y/yes or n/no): " confirmRestore
+    confirmRestore=$(echo "$confirmRestore" | tr '[:upper:]' '[:lower:]')
 
-    if [[ "$confirmRestore" =~ ^(y|yes)$ ]]; then
+    if [[ "$confirmRestore" == "y" || "$confirmRestore" == "yes" ]]; then
         for backupFile in "${backupFiles[@]}"; do
             local baseName
             baseName="$(basename "$backupFile")"

@@ -1,52 +1,113 @@
 #!/bin/bash
 
 # ==============================================================================
-# Universal Docker Apps Manager
+# Docker Compose Apps Manager
 #
 # A script to manage Docker Compose applications organized in a specific
 # directory structure. It supports "essential" apps and selectable "managed"
 # apps, with features for starting, stopping, and viewing their status.
+#
+# Features:
+# - Interactive first-run setup for user-friendly configuration.
+# - External configuration file (~/.config/app_manager/config.conf).
+# - Manages "essential" and "managed" app groups separately.
 # ==============================================================================
 
 # --- Strict Mode ---
 set -euo pipefail
 
-# --- Colors for script output ---
-C_RED='\e[31m'
-C_GREEN='\e[32m'
-C_YELLOW='\e[33m'
-C_BLUE='\e[34m'
-C_GRAY='\e[90m'
-C_RESET='\e[0m'
+# --- Cosmetics ---
+C_RED=$'\e[31m'
+C_GREEN=$'\e[32m'
+C_YELLOW=$'\e[33m'
+C_BLUE=$'\e[34m'
+C_GRAY=$'\e[90m'
+C_RESET=$'\e[0m'
+TICKMARK=$'\e[32m\xE2\x9C\x93' # GREEN ✓
 
-# --- Default Configuration (can be overridden by external config file) ---
-APPS_BASE_PATH="$HOME/apps"
-MANAGED_SUBDIR="managed_stacks"
-LOG_DIR="/home/pavdig/logs/app_manager_logs"
-CONFIG_DIR="$HOME/.config/app_manager"
-CONFIG_FILE="$CONFIG_DIR/config.sh"
+# --- User Detection ---
+if [[ -n "${SUDO_USER-}" ]]; then
+    CURRENT_USER="${SUDO_USER}"
+else
+    CURRENT_USER="${USER:-$(whoami)}"
+fi
 
-# --- Function to create and source the external configuration ---
-setup_and_load_config() {
-    if [ ! -f "$CONFIG_FILE" ]; then
-        echo -e "${C_YELLOW}Configuration file not found. Creating a default one at '$CONFIG_FILE'...${C_RESET}"
-        mkdir -p "$CONFIG_DIR"
-        cat > "$CONFIG_FILE" << EOL
-#!/bin/bash
+# --- Configuration Path ---
+CONFIG_DIR="/home/${CURRENT_USER}/.config/app_manager"
+CONFIG_FILE="${CONFIG_DIR}/config.conf"
+
+
+# --- Function for First-Time Setup ---
+initial_setup() {
+    clear
+    echo -e "${C_BLUE}########################################################${C_RESET}"
+    echo -e "${C_BLUE}#   ${C_YELLOW}Welcome to the Docker Compose App Manager Setup!   ${C_BLUE}#${C_RESET}"
+    echo -e "${C_BLUE}########################################################${C_RESET}\n"
+    echo -e "This setup will configure the directory structure for your Docker apps."
+    echo -e "Settings will be saved to: ${C_GREEN}${CONFIG_FILE}${C_RESET}\n"
+
+    # --- Define Defaults ---
+    local apps_path_def="/home/${CURRENT_USER}/apps"
+    local managed_subdir_def="managed_stacks"
+    local log_dir_def="/home/${CURRENT_USER}/logs/app_manager_logs"
+    local apps_path managed_subdir log_dir
+
+    # --- Prompt for Settings ---
+    echo -e "${C_YELLOW}Step 1: Set the Base Application Path${C_RESET}"
+    echo "This is the main folder where all your application directories are stored."
+    printf "Enter path [%b%s%b]: " "${C_GREEN}" "${apps_path_def}" "${C_RESET}"; read apps_path
+    APPS_BASE_PATH=${apps_path:-$apps_path_def}
+    echo ""
+
+    echo -e "${C_YELLOW}Step 2: Set the Managed Apps Subdirectory${C_RESET}"
+    echo "This is the name of the folder inside your base path for apps you want to start/stop individually."
+    printf "Enter name [%b%s%b]: " "${C_GREEN}" "${managed_subdir_def}" "${C_RESET}"; read managed_subdir
+    MANAGED_SUBDIR=${managed_subdir:-$managed_subdir_def}
+    echo ""
+
+    echo -e "${C_YELLOW}Step 3: Set the Log Directory Path${C_RESET}"
+    printf "Enter path [%b%s%b]: " "${C_GREEN}" "${log_dir_def}" "${C_RESET}"; read log_dir
+    LOG_DIR=${log_dir:-$log_dir_def}
+    
+    # --- Confirmation ---
+    clear
+    echo -e "\n${C_GREEN}_--| App Manager Setup |---_${C_RESET}\n"
+    echo -e "${C_YELLOW}--- Configuration Summary ---${C_RESET}"
+    echo -e "Please review your settings:\n"
+    echo -e "  ${C_BLUE}Base Apps Path:${C_RESET}     ${C_GREEN}${APPS_BASE_PATH}${C_RESET}"
+    echo -e "  ${C_BLUE}Managed Subfolder:${C_RESET}  ${C_GREEN}${MANAGED_SUBDIR}${C_RESET}"
+    echo -e "  ${C_BLUE}Log Directory:${C_RESET}      ${C_GREEN}${LOG_DIR}${C_RESET}\n"
+    
+    read -p "Save this configuration? (Y/n): " confirm_setup
+    confirm_setup=$(echo "${confirm_setup:-y}" | tr '[:upper:]' '[:lower:]')
+
+    if [[ "$confirm_setup" == "y" || "$confirm_setup" == "yes" ]]; then
+        echo -e "\n${C_GREEN}Saving configuration...${C_RESET}"
+        mkdir -p "${CONFIG_DIR}"
+        
+        # Write configuration to file
+        tee "${CONFIG_FILE}" > /dev/null << EOF
 # --- User Configuration for App Manager ---
 # Base path where all your application directories are stored.
-APPS_BASE_PATH="$HOME/apps"
+APPS_BASE_PATH="${APPS_BASE_PATH}"
+
 # Subdirectory within APPS_BASE_PATH for apps to manage individually.
-MANAGED_SUBDIR="managed_stacks"
+MANAGED_SUBDIR="${MANAGED_SUBDIR}"
+
 # Directory for log files.
-LOG_DIR="/home/pavdig/logs/app_manager_logs"
-EOL
-        echo -e "${C_GREEN}Default config created. Please review it and re-run the script if needed.${C_RESET}"
+LOG_DIR="${LOG_DIR}"
+EOF
+
+        echo -e "${C_YELLOW}Creating directories and setting permissions...${C_RESET}"
+        mkdir -p "${APPS_BASE_PATH}/${MANAGED_SUBDIR}" "${LOG_DIR}"
+        chown -R "${CURRENT_USER}:${CURRENT_USER}" "${CONFIG_DIR}" "${APPS_BASE_PATH}" "${LOG_DIR}"
+    
+        echo -e "${C_GREEN}${TICKMARK} Setup complete! The script will now continue.${C_RESET}\n"
         sleep 2
+    else
+        echo -e "\n${C_RED}Setup canceled. Please run the script again to configure it.${C_RESET}"
+        exit 0
     fi
-    # Source the configuration file to override defaults
-    # shellcheck source=/dev/null
-    source "$CONFIG_FILE"
 }
 
 # --- Logging Setup ---
@@ -69,6 +130,7 @@ check_deps() {
         log "Error: Docker not found." "${C_RED}Error: Docker is not installed or not in your PATH.${C_RESET}"
         exit 1
     fi
+    # *** FIX: Added missing 'then' keyword ***
     if ! docker compose version &> /dev/null; then
         log "Error: Docker Compose V2 not found." "${C_RED}Error: Docker Compose V2 plugin is not available.${C_RESET}"
         exit 1
@@ -187,6 +249,9 @@ show_selection_menu() {
 show_status() {
     clear
     log "Generating App Status Overview" "${C_BLUE}Displaying App Status Overview...${C_RESET}"
+    
+    local less_prompt="(Scroll with arrow keys, press 'q' to return to menu)"
+
     ( # Start of output group to be piped to 'less'
         declare -A running_projects
         while read -r proj; do [[ -n "$proj" ]] && running_projects["$proj"]=1; done < <(docker compose ls --quiet)
@@ -218,8 +283,7 @@ show_status() {
             done
         fi
         echo -e "\n===================================================="
-        echo -e "\n${C_BLUE}(Scroll with arrow keys, press 'q' to return to menu)${C_RESET}"
-    ) | less -RFX
+    ) | less -RFX --prompt="$less_prompt"
 }
 
 handle_action() {
@@ -307,9 +371,23 @@ stop_all() {
     log "All Docker Compose project stop processes finished." ""
 }
 
-# --- Main Script Logic (FIXED) ---
+# --- Main Script Logic ---
 main() {
-    setup_and_load_config
+    # Check for config file and run setup if it doesn't exist
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        # Setup must be run with sudo to create directories and set ownership correctly
+        if [[ $EUID -ne 0 ]]; then
+            echo -e "${C_RED}This script's initial setup must be run with 'sudo' to create directories and set permissions.${C_RESET}"
+            exit 1
+        fi
+        initial_setup
+    fi
+    
+    # Source the configuration file to load user-defined variables
+    # shellcheck source=/dev/null
+    source "$CONFIG_FILE"
+
+    # Now that config is loaded, set up logging and check dependencies
     setup_logging
     check_deps
     
@@ -325,9 +403,8 @@ main() {
 
     while true; do
         clear
-        echo -e "==============================================\n   ${C_GREEN}Universal Docker Apps Manager${C_RESET}\n=============================================="
+        echo -e "==============================================\n   ${C_GREEN}Docker Compose Apps Manager${C_RESET}\n=============================================="
         
-        # Manually print the options for better control
         for i in "${!options[@]}"; do
             echo -e " ${C_YELLOW}$((i+1)))${C_RESET} ${options[$i]}"
         done
@@ -363,7 +440,7 @@ main() {
                 log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"
                 exit 0
                 ;;
-            "") # User pressed Enter without input - this is a clean no-op
+            "") 
                 continue
                 ;;
             *)
