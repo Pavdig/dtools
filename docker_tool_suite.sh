@@ -1,6 +1,6 @@
 #!/bin/bash
 # ======================================================================================
-# Docker Tool Suite
+# Docker Tool Suite v1.2
 # ======================================================================================
 
 # --- Strict Mode & Globals ---
@@ -157,9 +157,26 @@ initial_setup() {
     read -p $'\n'"Do you want to configure ignored volumes now? (y/N): " config_vols
     if [[ "${config_vols,,}" =~ ^(y|yes)$ ]]; then
         mapfile -t all_volumes < <(docker volume ls --format "{{.Name}}" | sort)
-        interactive_list_builder "Select Volumes to IGNORE" all_volumes selected_ignored_volumes
+        interactive_list_builder "Select Volumes to IGNORE during backup" all_volumes selected_ignored_volumes
     fi
     
+    # --- BEGIN: Added Ignored Images Configuration ---
+    local -a selected_ignored_images=()
+    read -p $'\n'"Do you want to configure ignored images now? (y/N): " config_imgs
+    if [[ "${config_imgs,,}" =~ ^(y|yes)$ ]]; then
+        mapfile -t all_images < <(docker image ls --format "{{.Repository}}:{{.Tag}}" | grep -v "<none>" | sort)
+        interactive_list_builder "Select Images to IGNORE during updates" all_images selected_ignored_images
+    fi
+    # --- END: Added Ignored Images Configuration ---
+
+    echo -e "\n${C_YELLOW}--- Secure Archive Settings (Optional) ---${C_RESET}"
+    read -sp "Enter a default password for RAR archives (leave blank for none): " rar_pass; echo
+    RAR_PASSWORD=${rar_pass}
+    read -p "Default RAR Compression Level (0-5) [${C_GREEN}3${C_RESET}]: " rar_level
+    RAR_COMPRESSION_LEVEL=${rar_level:-3}
+    read -p "Delete original backup folder after creating RAR archive? (y/N): " rar_delete_src
+    RAR_DELETE_SOURCE_AFTER=$([[ "${rar_delete_src,,}" =~ ^(y|yes)$ ]] && echo "true" || echo "false")
+
     clear
     echo -e "\n${C_GREEN}_--| Docker Tool Suite Setup |---_${C_RESET}\n"
     echo -e "${C_YELLOW}--- Configuration Summary ---${C_RESET}"
@@ -169,6 +186,9 @@ initial_setup() {
     echo "  Volume Manager:"
     echo -e "    Backup Path:     ${C_GREEN}${BACKUP_LOCATION}${C_RESET}"
     echo -e "    Restore Path:    ${C_GREEN}${RESTORE_LOCATION}${C_RESET}"
+    echo "  Archive Settings:"
+    echo -e "    RAR Level:       ${C_GREEN}${RAR_COMPRESSION_LEVEL}${C_RESET}"
+    echo -e "    Delete Source:   ${C_GREEN}${RAR_DELETE_SOURCE_AFTER}${C_RESET}"
     echo "  General:"
     echo -e "    Log Path:        ${C_GREEN}${LOG_DIR}${C_RESET}\n"
     
@@ -192,9 +212,25 @@ initial_setup() {
         if [ ${#selected_ignored_volumes[@]} -gt 0 ]; then
             printf "\n"; for vol in "${selected_ignored_volumes[@]}"; do echo "    \"$vol\""; done
         else
-            printf "\n"; echo "    \"example-of-ignored_volume-1\""; echo "    \"example-of-ignored_volume-2\""
+            printf "\n"; echo "    \"example-of-ignored_volume-1\""
         fi
         echo ")"
+        # --- BEGIN: Save Ignored Images to config ---
+        echo
+        echo "# List of images to ignore during updates (e.g., custom builds or pinned versions)."
+        echo -n "IGNORED_IMAGES=("
+        if [ ${#selected_ignored_images[@]} -gt 0 ]; then
+            printf "\n"; for img in "${selected_ignored_images[@]}"; do echo "    \"$img\""; done
+        else
+            printf "\n"; echo "    \"custom-registry/my-custom-app:latest\""
+        fi
+        echo ")"
+        # --- END: Save Ignored Images to config ---
+        echo
+        echo "# --- Secure Archive (RAR) ---"
+        printf "RAR_PASSWORD=%q\n" "${RAR_PASSWORD}"
+        echo "RAR_COMPRESSION_LEVEL=${RAR_COMPRESSION_LEVEL}"
+        echo "RAR_DELETE_SOURCE_AFTER=${RAR_DELETE_SOURCE_AFTER}"
         echo
         echo "# --- General ---"
         echo "LOG_DIR=\"${LOG_DIR}\""
@@ -305,20 +341,52 @@ _update_app_task() {
         was_running=true
     fi
 
-    log "Pulling latest images for '$app_name'..."
-    if execute_and_log $SUDO_CMD docker compose -f "$compose_file" pull; then
-        log "Pull successful for $app_name."
+    # --- BEGIN: Reworked image pull logic to handle ignored images ---
+    log "Checking for images to update for '$app_name'..."
+    mapfile -t all_app_images < <($SUDO_CMD docker compose -f "$compose_file" config --images 2>/dev/null)
+    
+    local -a images_to_pull=()
+    local all_pulls_succeeded=true
+
+    if [ ${#all_app_images[@]} -eq 0 ]; then
+        log "No images defined in compose file for $app_name. Nothing to pull."
+    else
+        for image in "${all_app_images[@]}"; do
+            if [[ " ${IGNORED_IMAGES[*]-} " =~ " ${image} " ]]; then
+                log "Skipping ignored image: $image" "   -> Skipping ignored image: ${C_GRAY}${image}${C_RESET}"
+            else
+                images_to_pull+=("$image")
+            fi
+        done
+
+        if [ ${#images_to_pull[@]} -gt 0 ]; then
+            echo -e "Pulling latest versions for non-ignored images in ${C_YELLOW}${app_name}${C_RESET}..."
+            for image in "${images_to_pull[@]}"; do
+                log "Pulling image: $image" "   -> Pulling ${C_BLUE}${image}${C_RESET}..."
+                if ! execute_and_log $SUDO_CMD docker pull "$image"; then
+                    log "ERROR: Failed to pull image $image" "${C_BOLD_RED}Failed to pull ${image}. Check log for details.${C_RESET}"
+                    all_pulls_succeeded=false
+                fi
+            done
+        else
+            log "All images for '$app_name' are on the ignore list. No images to pull." "All images for '${app_name}' are on the ignore list. Nothing to pull."
+        fi
+    fi
+
+    if $all_pulls_succeeded; then
+        log "Image update check successful for $app_name."
         if $was_running; then
-            log "Restarting running application '$app_name'..."
+            log "Restarting running application '$app_name' to apply any updates..."
             execute_and_log $SUDO_CMD docker compose -f "$compose_file" up -d --remove-orphans
             log "Successfully updated and restarted '$app_name'."
         else
-            log "Application '$app_name' was not running. Image updated, but app remains stopped."
+            log "Application '$app_name' was not running. Images updated, but app remains stopped."
         fi
     else
-        log "ERROR: Failed to pull new images for '$app_name'. Aborting update."
-        echo -e "${C_BOLD_RED}Failed to pull new images for '$app_name'. Check log for details.${C_RESET}"
+        log "ERROR: Failed to pull one or more images for '$app_name'. Aborting update to prevent issues."
+        echo -e "${C_BOLD_RED}Update for '$app_name' aborted due to pull failures. The application was not restarted.${C_RESET}"
     fi
+    # --- END: Reworked image pull logic ---
 }
 
 app_manager_status() {
@@ -561,6 +629,152 @@ volume_checker_main() {
     done
 }
 
+_find_project_dir_by_name() {
+    local project_name="$1"
+    
+    # Search in Essential Apps path
+    if [ -d "$APPS_BASE_PATH/$project_name" ]; then
+        if find_compose_file "$APPS_BASE_PATH/$project_name" &>/dev/null; then
+            echo "$APPS_BASE_PATH/$project_name"
+            return 0
+        fi
+    fi
+
+    # Search in Managed Apps path
+    local managed_path="$APPS_BASE_PATH/$MANAGED_SUBDIR"
+    if [ -d "$managed_path/$project_name" ]; then
+        if find_compose_file "$managed_path/$project_name" &>/dev/null; then
+            echo "$managed_path/$project_name"
+            return 0
+        fi
+    fi
+    
+    return 1 # Not found
+}
+
+volume_smart_backup_main() {
+    clear; echo -e "${C_GREEN}Starting Smart Docker Volume Backup...${C_RESET}"; ensure_backup_image
+
+    mapfile -t all_volumes < <($SUDO_CMD docker volume ls --format "{{.Name}}"); local -a filtered_volumes=()
+    for volume in "${all_volumes[@]}"; do if [[ ! " ${IGNORED_VOLUMES[*]-} " =~ " ${volume} " ]]; then filtered_volumes+=("$volume"); fi; done
+    if [[ ${#filtered_volumes[@]} -eq 0 ]]; then echo -e "${C_YELLOW}No available volumes to back up.${C_RESET}"; sleep 2; return; fi
+
+    local -a selected_status=(); for ((i=0; i<${#filtered_volumes[@]}; i++)); do selected_status+=("true"); done
+    if ! show_selection_menu "Select Volumes for SMART BACKUP" "backup" filtered_volumes selected_status; then echo -e "${C_RED}Backup canceled.${C_RESET}"; return; fi
+    local selected_volumes=(); for i in "${!filtered_volumes[@]}"; do if ${selected_status[$i]}; then selected_volumes+=("${filtered_volumes[$i]}"); fi; done
+    if [[ ${#selected_volumes[@]} -eq 0 ]]; then echo -e "\n${C_RED}No volumes selected! Exiting.${C_RESET}"; return; fi
+
+    # --- Phase 1: Group selected volumes by the app that owns them ---
+    echo -e "\n${C_YELLOW}Analyzing volumes and grouping them by application...${C_RESET}"
+    declare -A app_volumes_map
+    declare -A app_dir_map
+    local -a standalone_volumes=()
+    local processed_volumes_str=" "
+
+    for volume in "${selected_volumes[@]}"; do
+        local container_id; container_id=$($SUDO_CMD docker ps -q --filter "volume=${volume}" | head -n 1)
+        if [[ -z "$container_id" ]]; then
+            standalone_volumes+=("$volume")
+            continue
+        fi
+
+        local project_name; project_name=$($SUDO_CMD docker inspect "$container_id" --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null)
+        if [[ -n "$project_name" ]]; then
+            # Add all volumes used by this project to its group
+            local project_dir; project_dir=$(_find_project_dir_by_name "$project_name")
+            if [[ -n "$project_dir" && ! -v "app_dir_map[$project_name]" ]]; then
+                app_dir_map["$project_name"]="$project_dir"
+                echo " -> Found application: ${C_BLUE}${project_name}${C_RESET}"
+            fi
+
+            mapfile -t all_vols_for_project < <($SUDO_CMD docker compose -p "$project_name" ps -q | xargs -r $SUDO_CMD docker inspect --format '{{range .Mounts}}{{.Name}} {{end}}' | tr ' ' '\n' | sort -u)
+            
+            for proj_vol in "${all_vols_for_project[@]}"; do
+                if [[ " ${selected_volumes[*]} " =~ " ${proj_vol} " && ! " ${processed_volumes_str} " =~ " ${proj_vol} " ]]; then
+                    app_volumes_map["$project_name"]+="${proj_vol} "
+                    processed_volumes_str+="${proj_vol} "
+                fi
+            done
+        else
+            standalone_volumes+=("$volume")
+        fi
+    done
+    
+    # Finalize standalone volumes list
+    local final_standalone=()
+    for vol in "${standalone_volumes[@]}"; do
+        if [[ ! " ${processed_volumes_str} " =~ " ${vol} " ]]; then
+             final_standalone+=("$vol")
+             processed_volumes_str+="${vol} "
+        fi
+    done
+    standalone_volumes=("${final_standalone[@]}")
+
+    local backup_dir="${BACKUP_LOCATION%/}/$(date +'%Y-%m-%d_%H-%M-%S')"; mkdir -p "$backup_dir"
+
+    # --- Phase 2: Process backups on a per-app basis ---
+    if [ ${#app_volumes_map[@]} -gt 0 ]; then
+        echo -e "\n${C_GREEN}--- Processing Application-Linked Backups ---${C_RESET}"
+        for app_name in "${!app_volumes_map[@]}"; do
+            echo -e "\n${C_YELLOW}Processing app: ${C_BLUE}${app_name}${C_RESET}"
+            
+            local app_dir=${app_dir_map[$app_name]}
+            
+            # 1. Stop the app
+            _stop_app_task "$app_name" "$app_dir"
+            
+            # 2. Backup its volumes
+            local -a vols_to_backup; read -r -a vols_to_backup <<< "${app_volumes_map[$app_name]}"
+            echo "   -> Backing up ${#vols_to_backup[@]} volume(s) for this app..."
+            for volume in "${vols_to_backup[@]}"; do
+                echo "      - Backing up ${C_BLUE}${volume}${C_RESET}..."
+                execute_and_log $SUDO_CMD docker run --rm -v "${volume}:/volume:ro" -v "${backup_dir}:/backup" "${BACKUP_IMAGE}" tar -C /volume --zstd -cvf "/backup/${volume}.tar.zst" .
+            done
+
+            # 3. Start the app
+            _start_app_task "$app_name" "$app_dir"
+            echo -e "${C_GREEN}Finished processing ${app_name}.${C_RESET}"
+        done
+    fi
+
+    # --- Phase 3: Process standalone volumes ---
+    if [ ${#standalone_volumes[@]} -gt 0 ]; then
+        echo -e "\n${C_GREEN}--- Processing Standalone Volume Backups ---${C_RESET}"
+        for volume in "${standalone_volumes[@]}"; do
+            echo -e "${C_YELLOW}Backing up standalone volume: ${C_BLUE}${volume}${C_RESET}..."
+            execute_and_log $SUDO_CMD docker run --rm -v "${volume}:/volume:ro" -v "${backup_dir}:/backup" "${BACKUP_IMAGE}" tar -C /volume --zstd -cvf "/backup/${volume}.tar.zst" .
+        done
+    fi
+
+    echo -e "\n${C_YELLOW}Changing ownership of all backup files to user '${CURRENT_USER}'...${C_RESET}"
+    $SUDO_CMD chown -R "${CURRENT_USER}:${CURRENT_USER}" "$backup_dir"
+    echo -e "\n${C_GREEN}${TICKMARK} All backup tasks completed successfully!${C_RESET}"
+
+    # --- Phase 4: Create Secure RAR Archive (unchanged) ---
+    read -p $'\n'"Do you want to create a single, password-protected RAR archive from this backup? (Y/n): " create_rar
+    if [[ ! "$(echo "${create_rar:-y}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|yes)$ ]]; then
+        echo -e "${C_YELLOW}Skipping RAR archive creation.${C_RESET}"; return
+    fi
+    if ! command -v rar &>/dev/null; then echo -e "\n${C_BOLD_RED}Error: 'rar' command not found...${C_RESET}"; return 1; fi
+    local archive_password="${RAR_PASSWORD-}"; if [[ -z "$archive_password" ]]; then read -sp "Enter password for the archive: " archive_password; echo; fi
+    if [[ -z "$archive_password" ]]; then echo -e "${C_RED}No password provided. Aborting.${C_RESET}"; return; fi
+    local archive_name="Apps-backup[$(date +'%d.%m.%Y')].rar"; local archive_path="$(dirname "$backup_dir")/${archive_name}"
+    local rar_split_opt=""; local total_size; total_size=$(du -sb "$backup_dir" | awk '{print $1}'); local eight_gb=$((8 * 1024 * 1024 * 1024))
+    if (( total_size > eight_gb )); then
+        read -p "Backup size is over 8GB. Split archive into 8GB parts? (Y/n): " confirm_split
+        if [[ "$(echo "${confirm_split:-y}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|yes)$ ]]; then rar_split_opt="-v8g"; fi
+    fi
+    echo -e "\n${C_YELLOW}Creating secure RAR archive: ${C_GREEN}${archive_path}${C_RESET}"; echo -e "${C_GRAY}(This may take some time...)${C_RESET}"
+    if execute_and_log rar a -ep1 ${rar_split_opt} "-m${RAR_COMPRESSION_LEVEL:-3}" "-hp${archive_password}" -- "${archive_path}" "${backup_dir}"; then
+        echo -e "${C_GREEN}${TICKMARK} Secure archive created successfully.${C_RESET}"; $SUDO_CMD chown "${CURRENT_USER}:${CURRENT_USER}" "${archive_path}"*
+        local should_delete_source=${RAR_DELETE_SOURCE_AFTER:-false}; local prompt_text="Delete the original backup folder ('${backup_dir}')?"; local prompt_opts=$([[ "$should_delete_source" == "true" ]] && echo "Y/n" || echo "y/N"); read -p "${prompt_text} [${prompt_opts}]: " confirm_del
+        local final_decision=false; if [[ "${confirm_del,,}" == "y" ]] || [[ "${confirm_del,,}" == "yes" ]]; then final_decision=true; elif [[ -z "$confirm_del" && "$should_delete_source" == "true" ]]; then final_decision=true; fi
+        if $final_decision; then echo -e "${C_YELLOW}Deleting source folder...${C_RESET}"; rm -rf "${backup_dir}"; echo -e "${C_GREEN}Source folder deleted.${C_RESET}"; else echo -e "${C_YELLOW}Original backup folder kept.${C_RESET}"; fi
+    else
+        echo -e "${C_BOLD_RED}Error: Failed to create RAR archive. Check logs for details.${C_RESET}"
+    fi
+}
+
 volume_backup_main() {
     clear; echo -e "${C_GREEN}Starting Docker Volume Backup...${C_RESET}"; ensure_backup_image
     mapfile -t all_volumes < <($SUDO_CMD docker volume ls --format "{{.Name}}"); local -a filtered_volumes=()
@@ -579,6 +793,76 @@ volume_backup_main() {
     echo -e "\n${C_YELLOW}Changing ownership of backup files to user '${CURRENT_USER}'...${C_RESET}"
     $SUDO_CMD chown -R "${CURRENT_USER}:${CURRENT_USER}" "$backup_dir"
     echo -e "\n${C_GREEN}${TICKMARK} All backups completed successfully!${C_RESET}"
+
+    # --- BEGIN: Modified Secure RAR Archive Creation ---
+    read -p $'\n'"Do you want to create a single, password-protected RAR archive from this backup? (Y/n): " create_rar
+    if [[ ! "$(echo "${create_rar:-y}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|yes)$ ]]; then
+        echo -e "${C_YELLOW}Skipping RAR archive creation.${C_RESET}"
+        return
+    fi
+
+    if ! command -v rar &>/dev/null; then
+        echo -e "\n${C_BOLD_RED}Error: 'rar' command not found.${C_RESET}" >&2
+        echo -e "${C_YELLOW}Please install it to use this feature (e.g., 'sudo apt-get install rar').${C_RESET}" >&2
+        return 1
+    fi
+
+    local archive_password="${RAR_PASSWORD-}"
+    if [[ -z "$archive_password" ]]; then
+        read -sp "Enter password for the archive (input is hidden): " archive_password; echo
+        if [[ -z "$archive_password" ]]; then
+            echo -e "${C_RED}No password provided. Aborting RAR creation.${C_RESET}"; return
+        fi
+    fi
+
+    # MODIFIED: New archive name format
+    local archive_name; archive_name="Apps-backup[$(date +'%d.%m.%Y')].rar"
+    local archive_path; archive_path="$(dirname "$backup_dir")/${archive_name}"
+
+    # MODIFIED: Logic to ask for splitting large archives
+    local rar_split_opt=""
+    local total_size; total_size=$(du -sb "$backup_dir" | awk '{print $1}')
+    local eight_gb=$((8 * 1024 * 1024 * 1024))
+    if (( total_size > eight_gb )); then
+        read -p "Backup size is over 8GB. Split archive into 8GB parts? (Y/n): " confirm_split
+        if [[ "$(echo "${confirm_split:-y}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|yes)$ ]]; then
+            rar_split_opt="-v8g"
+            echo -e "${C_YELLOW}Archive will be split into 8GB files.${C_RESET}"
+        fi
+    fi
+
+    echo -e "\n${C_YELLOW}Creating secure RAR archive: ${C_GREEN}${archive_path}${C_RESET}"
+    echo -e "${C_GRAY}(This may take some time...)${C_RESET}"
+
+    # MODIFIED: Added -ep1 to strip base path and ${rar_split_opt} for splitting
+    # -hp encrypts file data and headers. -ep1 excludes base directory.
+    if execute_and_log rar a -ep1 ${rar_split_opt} "-m${RAR_COMPRESSION_LEVEL:-3}" "-hp${archive_password}" -- "${archive_path}" "${backup_dir}"; then
+        echo -e "${C_GREEN}${TICKMARK} Secure archive created successfully.${C_RESET}"
+        $SUDO_CMD chown "${CURRENT_USER}:${CURRENT_USER}" "${archive_path}"*
+
+        local should_delete_source=${RAR_DELETE_SOURCE_AFTER:-false}
+        local prompt_text="Delete the original backup folder ('${backup_dir}')?"
+        local prompt_opts=$([[ "$should_delete_source" == "true" ]] && echo "Y/n" || echo "y/N")
+        read -p "${prompt_text} [${prompt_opts}]: " confirm_del
+
+        local final_decision=false
+        if [[ "${confirm_del,,}" == "y" ]] || [[ "${confirm_del,,}" == "yes" ]]; then
+            final_decision=true
+        elif [[ -z "$confirm_del" && "$should_delete_source" == "true" ]]; then
+            final_decision=true
+        fi
+
+        if $final_decision; then
+            echo -e "${C_YELLOW}Deleting source folder...${C_RESET}"
+            rm -rf "${backup_dir}"
+            echo -e "${C_GREEN}Source folder deleted.${C_RESET}"
+        else
+            echo -e "${C_YELLOW}Original backup folder kept.${C_RESET}"
+        fi
+    else
+        echo -e "${C_BOLD_RED}Error: Failed to create RAR archive. Check logs for details.${C_RESET}"
+    fi
+    # --- END: Modified Secure RAR Archive Creation ---
 }
 
 volume_restore_main() {
@@ -625,7 +909,13 @@ volume_restore_main() {
 
 volume_manager_menu() {
     check_root
-    local options=( "Backup Volumes" "Restore Volumes" "Inspect / Manage a Volume" "Return to Main Menu" )
+    local options=(
+        "Smart Backup (Stop/Start Apps)"
+        "Backup Volumes (Standard)"
+        "Restore Volumes"
+        "Inspect / Manage a Volume"
+        "Return to Main Menu"
+    )
     while true; do
         clear
         echo -e "==============================================\n   ${C_GREEN}Volume Manager${C_RESET}\n=============================================="
@@ -633,10 +923,11 @@ volume_manager_menu() {
         echo "----------------------------------------------"
         read -rp "Please select an option: " choice
         case "$choice" in
-            1) volume_backup_main; echo -e "\nPress Enter to return..."; read -r;;
-            2) volume_restore_main; echo -e "\nPress Enter to return..."; read -r;;
-            3) volume_checker_main ;;
-            4) return ;;
+            1) volume_smart_backup_main; echo -e "\nPress Enter to return..."; read -r;;
+            2) volume_backup_main; echo -e "\nPress Enter to return..."; read -r;;
+            3) volume_restore_main; echo -e "\nPress Enter to return..."; read -r;;
+            4) volume_checker_main ;;
+            5) return ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
         esac
     done
