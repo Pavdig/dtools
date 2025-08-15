@@ -1,6 +1,6 @@
 #!/bin/bash
 # ======================================================================================
-# Docker Tool Suite v1.2
+# Docker Tool Suite v1.2.3
 # ======================================================================================
 
 # --- Strict Mode & Globals ---
@@ -29,7 +29,7 @@ else
 fi
 SCRIPT_PATH=$(readlink -f "$0")
 
-# --- MODIFIED: Command Prefix for Sudo ---
+# --- Command Prefix for Sudo ---
 SUDO_CMD=""
 if [[ $EUID -ne 0 ]]; then
     SUDO_CMD="sudo"
@@ -41,7 +41,7 @@ CONFIG_FILE="${CONFIG_DIR}/config.conf"
 
 # --- Shared Helper Functions ---
 
-# --- MODIFIED: check_root now authenticates on demand ---
+# --- check_root now authenticates on demand ---
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         echo -e "${C_YELLOW}This action requires root privileges. Please enter your password.${C_RESET}"
@@ -67,7 +67,7 @@ execute_and_log() {
 check_deps() {
     log "Checking dependencies..." "${C_GRAY}Checking dependencies...${C_RESET}"
     local error_found=false
-    # MODIFIED: Use $SUDO_CMD
+    # Use $SUDO_CMD
     if ! command -v docker &>/dev/null; then log "Error: Docker not found." "${C_RED}Error: Docker is not installed...${C_RESET}"; error_found=true; fi
     if ! $SUDO_CMD docker compose version &>/dev/null; then log "Error: Docker Compose V2 not found." "${C_RED}Error: Docker Compose V2 not available...${C_RESET}"; error_found=true; fi
     if $error_found; then exit 1; fi
@@ -160,14 +160,13 @@ initial_setup() {
         interactive_list_builder "Select Volumes to IGNORE during backup" all_volumes selected_ignored_volumes
     fi
     
-    # --- BEGIN: Added Ignored Images Configuration ---
+    # --- Ignored Images Configuration ---
     local -a selected_ignored_images=()
     read -p $'\n'"Do you want to configure ignored images now? (y/N): " config_imgs
     if [[ "${config_imgs,,}" =~ ^(y|yes)$ ]]; then
         mapfile -t all_images < <(docker image ls --format "{{.Repository}}:{{.Tag}}" | grep -v "<none>" | sort)
         interactive_list_builder "Select Images to IGNORE during updates" all_images selected_ignored_images
     fi
-    # --- END: Added Ignored Images Configuration ---
 
     echo -e "\n${C_YELLOW}--- Secure Archive Settings (Optional) ---${C_RESET}"
     read -sp "Enter a default password for RAR archives (leave blank for none): " rar_pass; echo
@@ -215,7 +214,7 @@ initial_setup() {
             printf "\n"; echo "    \"example-of-ignored_volume-1\""
         fi
         echo ")"
-        # --- BEGIN: Save Ignored Images to config ---
+        # --- Save Ignored Images to config ---
         echo
         echo "# List of images to ignore during updates (e.g., custom builds or pinned versions)."
         echo -n "IGNORED_IMAGES=("
@@ -225,7 +224,6 @@ initial_setup() {
             printf "\n"; echo "    \"custom-registry/my-custom-app:latest\""
         fi
         echo ")"
-        # --- END: Save Ignored Images to config ---
         echo
         echo "# --- Secure Archive (RAR) ---"
         printf "RAR_PASSWORD=%q\n" "${RAR_PASSWORD}"
@@ -341,7 +339,7 @@ _update_app_task() {
         was_running=true
     fi
 
-    # --- BEGIN: Reworked image pull logic to handle ignored images ---
+    # --- Image pull logic to handle ignored images ---
     log "Checking for images to update for '$app_name'..."
     mapfile -t all_app_images < <($SUDO_CMD docker compose -f "$compose_file" config --images 2>/dev/null)
     
@@ -386,7 +384,6 @@ _update_app_task() {
         log "ERROR: Failed to pull one or more images for '$app_name'. Aborting update to prevent issues."
         echo -e "${C_BOLD_RED}Update for '$app_name' aborted due to pull failures. The application was not restarted.${C_RESET}"
     fi
-    # --- END: Reworked image pull logic ---
 }
 
 app_manager_status() {
@@ -713,7 +710,7 @@ volume_smart_backup_main() {
     local backup_dir="${BACKUP_LOCATION%/}/$(date +'%Y-%m-%d_%H-%M-%S')"; mkdir -p "$backup_dir"
 
     # --- Phase 2: Process backups on a per-app basis ---
-    if [ ${#app_volumes_map[@]} -gt 0 ]; then
+    if [ -n "${!app_volumes_map[*]}" ]; then
         echo -e "\n${C_GREEN}--- Processing Application-Linked Backups ---${C_RESET}"
         for app_name in "${!app_volumes_map[@]}"; do
             echo -e "\n${C_YELLOW}Processing app: ${C_BLUE}${app_name}${C_RESET}"
@@ -750,7 +747,7 @@ volume_smart_backup_main() {
     $SUDO_CMD chown -R "${CURRENT_USER}:${CURRENT_USER}" "$backup_dir"
     echo -e "\n${C_GREEN}${TICKMARK} All backup tasks completed successfully!${C_RESET}"
 
-    # --- Phase 4: Create Secure RAR Archive (unchanged) ---
+    # --- Phase 4: Create Secure RAR Archive ---
     read -p $'\n'"Do you want to create a single, password-protected RAR archive from this backup? (Y/n): " create_rar
     if [[ ! "$(echo "${create_rar:-y}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|yes)$ ]]; then
         echo -e "${C_YELLOW}Skipping RAR archive creation.${C_RESET}"; return
@@ -766,103 +763,15 @@ volume_smart_backup_main() {
     fi
     echo -e "\n${C_YELLOW}Creating secure RAR archive: ${C_GREEN}${archive_path}${C_RESET}"; echo -e "${C_GRAY}(This may take some time...)${C_RESET}"
     if execute_and_log rar a -ep1 ${rar_split_opt} "-m${RAR_COMPRESSION_LEVEL:-3}" "-hp${archive_password}" -- "${archive_path}" "${backup_dir}"; then
-        echo -e "${C_GREEN}${TICKMARK} Secure archive created successfully.${C_RESET}"; $SUDO_CMD chown "${CURRENT_USER}:${CURRENT_USER}" "${archive_path}"*
+        echo -e "${C_GREEN}${TICKMARK} Secure archive created successfully.${C_RESET}";
+        # --- chown globbing for split archives ---
+        $SUDO_CMD chown "${CURRENT_USER}:${CURRENT_USER}" "${archive_path%.rar}"*.rar
         local should_delete_source=${RAR_DELETE_SOURCE_AFTER:-false}; local prompt_text="Delete the original backup folder ('${backup_dir}')?"; local prompt_opts=$([[ "$should_delete_source" == "true" ]] && echo "Y/n" || echo "y/N"); read -p "${prompt_text} [${prompt_opts}]: " confirm_del
         local final_decision=false; if [[ "${confirm_del,,}" == "y" ]] || [[ "${confirm_del,,}" == "yes" ]]; then final_decision=true; elif [[ -z "$confirm_del" && "$should_delete_source" == "true" ]]; then final_decision=true; fi
         if $final_decision; then echo -e "${C_YELLOW}Deleting source folder...${C_RESET}"; rm -rf "${backup_dir}"; echo -e "${C_GREEN}Source folder deleted.${C_RESET}"; else echo -e "${C_YELLOW}Original backup folder kept.${C_RESET}"; fi
     else
         echo -e "${C_BOLD_RED}Error: Failed to create RAR archive. Check logs for details.${C_RESET}"
     fi
-}
-
-volume_backup_main() {
-    clear; echo -e "${C_GREEN}Starting Docker Volume Backup...${C_RESET}"; ensure_backup_image
-    mapfile -t all_volumes < <($SUDO_CMD docker volume ls --format "{{.Name}}"); local -a filtered_volumes=()
-    for volume in "${all_volumes[@]}"; do if [[ ! " ${IGNORED_VOLUMES[*]-} " =~ " ${volume} " ]]; then filtered_volumes+=("$volume"); fi; done
-    if [[ ${#filtered_volumes[@]} -eq 0 ]]; then echo -e "${C_YELLOW}No available volumes to back up.${C_RESET}"; sleep 2; return; fi
-    local -a selected_status=(); for ((i=0; i<${#filtered_volumes[@]}; i++)); do selected_status+=("true"); done
-    if ! show_selection_menu "Select Volumes to BACKUP" "backup" filtered_volumes selected_status; then echo -e "${C_RED}Backup canceled.${C_RESET}"; return; fi
-    local selected_volumes=(); for i in "${!filtered_volumes[@]}"; do if ${selected_status[$i]}; then selected_volumes+=("${filtered_volumes[$i]}"); fi; done
-    if [[ ${#selected_volumes[@]} -eq 0 ]]; then echo -e "\n${C_RED}No volumes selected! Exiting.${C_RESET}"; return; fi
-    local backup_dir="${BACKUP_LOCATION%/}/$(date +'%Y-%m-%d_%H-%M-%S')"; mkdir -p "$backup_dir"
-    echo -e "\nBacking up ${#selected_volumes[@]} volume(s) to:\n${C_GREEN}${backup_dir}${C_RESET}\n"
-    for volume in "${selected_volumes[@]}"; do
-        echo -e "${C_YELLOW}Backing up ${C_BLUE}${volume}${C_RESET}..."
-        execute_and_log $SUDO_CMD docker run --rm -v "${volume}:/volume:ro" -v "${backup_dir}:/backup" "${BACKUP_IMAGE}" tar -C /volume --zstd -cvf "/backup/${volume}.tar.zst" .
-    done
-    echo -e "\n${C_YELLOW}Changing ownership of backup files to user '${CURRENT_USER}'...${C_RESET}"
-    $SUDO_CMD chown -R "${CURRENT_USER}:${CURRENT_USER}" "$backup_dir"
-    echo -e "\n${C_GREEN}${TICKMARK} All backups completed successfully!${C_RESET}"
-
-    # --- BEGIN: Modified Secure RAR Archive Creation ---
-    read -p $'\n'"Do you want to create a single, password-protected RAR archive from this backup? (Y/n): " create_rar
-    if [[ ! "$(echo "${create_rar:-y}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|yes)$ ]]; then
-        echo -e "${C_YELLOW}Skipping RAR archive creation.${C_RESET}"
-        return
-    fi
-
-    if ! command -v rar &>/dev/null; then
-        echo -e "\n${C_BOLD_RED}Error: 'rar' command not found.${C_RESET}" >&2
-        echo -e "${C_YELLOW}Please install it to use this feature (e.g., 'sudo apt-get install rar').${C_RESET}" >&2
-        return 1
-    fi
-
-    local archive_password="${RAR_PASSWORD-}"
-    if [[ -z "$archive_password" ]]; then
-        read -sp "Enter password for the archive (input is hidden): " archive_password; echo
-        if [[ -z "$archive_password" ]]; then
-            echo -e "${C_RED}No password provided. Aborting RAR creation.${C_RESET}"; return
-        fi
-    fi
-
-    # MODIFIED: New archive name format
-    local archive_name; archive_name="Apps-backup[$(date +'%d.%m.%Y')].rar"
-    local archive_path; archive_path="$(dirname "$backup_dir")/${archive_name}"
-
-    # MODIFIED: Logic to ask for splitting large archives
-    local rar_split_opt=""
-    local total_size; total_size=$(du -sb "$backup_dir" | awk '{print $1}')
-    local eight_gb=$((8 * 1024 * 1024 * 1024))
-    if (( total_size > eight_gb )); then
-        read -p "Backup size is over 8GB. Split archive into 8GB parts? (Y/n): " confirm_split
-        if [[ "$(echo "${confirm_split:-y}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|yes)$ ]]; then
-            rar_split_opt="-v8g"
-            echo -e "${C_YELLOW}Archive will be split into 8GB files.${C_RESET}"
-        fi
-    fi
-
-    echo -e "\n${C_YELLOW}Creating secure RAR archive: ${C_GREEN}${archive_path}${C_RESET}"
-    echo -e "${C_GRAY}(This may take some time...)${C_RESET}"
-
-    # MODIFIED: Added -ep1 to strip base path and ${rar_split_opt} for splitting
-    # -hp encrypts file data and headers. -ep1 excludes base directory.
-    if execute_and_log rar a -ep1 ${rar_split_opt} "-m${RAR_COMPRESSION_LEVEL:-3}" "-hp${archive_password}" -- "${archive_path}" "${backup_dir}"; then
-        echo -e "${C_GREEN}${TICKMARK} Secure archive created successfully.${C_RESET}"
-        $SUDO_CMD chown "${CURRENT_USER}:${CURRENT_USER}" "${archive_path}"*
-
-        local should_delete_source=${RAR_DELETE_SOURCE_AFTER:-false}
-        local prompt_text="Delete the original backup folder ('${backup_dir}')?"
-        local prompt_opts=$([[ "$should_delete_source" == "true" ]] && echo "Y/n" || echo "y/N")
-        read -p "${prompt_text} [${prompt_opts}]: " confirm_del
-
-        local final_decision=false
-        if [[ "${confirm_del,,}" == "y" ]] || [[ "${confirm_del,,}" == "yes" ]]; then
-            final_decision=true
-        elif [[ -z "$confirm_del" && "$should_delete_source" == "true" ]]; then
-            final_decision=true
-        fi
-
-        if $final_decision; then
-            echo -e "${C_YELLOW}Deleting source folder...${C_RESET}"
-            rm -rf "${backup_dir}"
-            echo -e "${C_GREEN}Source folder deleted.${C_RESET}"
-        else
-            echo -e "${C_YELLOW}Original backup folder kept.${C_RESET}"
-        fi
-    else
-        echo -e "${C_BOLD_RED}Error: Failed to create RAR archive. Check logs for details.${C_RESET}"
-    fi
-    # --- END: Modified Secure RAR Archive Creation ---
 }
 
 volume_restore_main() {
@@ -911,7 +820,6 @@ volume_manager_menu() {
     check_root
     local options=(
         "Smart Backup (Stop/Start Apps)"
-        "Backup Volumes (Standard)"
         "Restore Volumes"
         "Inspect / Manage a Volume"
         "Return to Main Menu"
@@ -924,10 +832,9 @@ volume_manager_menu() {
         read -rp "Please select an option: " choice
         case "$choice" in
             1) volume_smart_backup_main; echo -e "\nPress Enter to return..."; read -r;;
-            2) volume_backup_main; echo -e "\nPress Enter to return..."; read -r;;
-            3) volume_restore_main; echo -e "\nPress Enter to return..."; read -r;;
-            4) volume_checker_main ;;
-            5) return ;;
+            2) volume_restore_main; echo -e "\nPress Enter to return..."; read -r;;
+            3) volume_checker_main ;;
+            4) return ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
         esac
     done
@@ -980,7 +887,6 @@ log_viewer_main() {
         select choice in "${display_options[@]}"; do
             if [[ "$choice" == "Return to Main Menu" ]]; then
                 return
-            ## MODIFIED: Added the missing 'then' keyword to fix the syntax error.
             elif [[ -n "$choice" ]]; then
                 local idx=$((REPLY - 1))
                 less -RFX --prompt="$less_prompt" "${log_files[$idx]}"
@@ -1021,7 +927,6 @@ main_menu() {
 
 if [[ $# -gt 0 ]]; then
     if [[ ! -f "$CONFIG_FILE" ]]; then echo -e "${C_RED}Config not found. Please run with 'sudo' for initial setup.${C_RESET}"; exit 1; fi
-    # shellcheck source=/dev/null
     source "$CONFIG_FILE"
     LOG_FILE="$LOG_DIR/$(date +'%Y-%m-%d').log"; mkdir -p "$LOG_DIR"
     case "$1" in
@@ -1038,7 +943,6 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
     initial_setup
 fi
 
-# shellcheck source=/dev/null
 source "$CONFIG_FILE"
 LOG_FILE="$LOG_DIR/$(date +'%Y-%m-%d').log"; mkdir -p "$LOG_DIR"
 check_deps
