@@ -1,6 +1,6 @@
 #!/bin/bash
 # ======================================================================================
-# Docker Tool Suite v1.2.3
+# Docker Tool Suite v1.3.4
 # ======================================================================================
 
 # --- Strict Mode & Globals ---
@@ -41,6 +41,37 @@ CONFIG_FILE="${CONFIG_DIR}/config.conf"
 
 # --- Shared Helper Functions ---
 
+# --- Encryption Helpers ---
+get_secret_key() {
+    # Use a stable machine-specific ID for the encryption key.
+    if [[ -r /etc/machine-id ]]; then
+        cat /etc/machine-id
+    elif [[ -r /var/lib/dbus/machine-id ]]; then
+        cat /var/lib/dbus/machine-id
+    else
+        # Fallback for systems without machine-id. This is less secure.
+        log "Warning: machine-id not found. Using hostname as a fallback for encryption key."
+        hostname
+    fi
+}
+
+encrypt_pass() {
+    local plaintext="$1"
+    local key
+    key=$(get_secret_key)
+    # Encrypt with AES-256 and base64 encode for safe storage in the config file.
+    echo -n "$plaintext" | openssl enc -aes-256-cbc -a -salt -pbkdf2 -pass pass:"$key"
+}
+
+decrypt_pass() {
+    local encrypted_text="$1"
+    local key
+    key=$(get_secret_key)
+    # Decrypt the base64 encoded string. Suppress errors for clean output.
+    echo -n "$encrypted_text" | openssl enc -aes-256-cbc -a -d -salt -pbkdf2 -pass pass:"$key" 2>/dev/null
+}
+
+
 # --- check_root now authenticates on demand ---
 check_root() {
     if [[ $EUID -ne 0 ]]; then
@@ -59,6 +90,11 @@ log() {
 }
 
 execute_and_log() {
+    if $DRY_RUN; then
+        # Use printf for safer printing of arguments
+        printf "${C_GRAY}[DRY RUN] Would execute: %q${C_RESET}\n" "$@"
+        return 0 # Assume success in dry run mode
+    fi
     "$@" 2>&1 | tee -a "${LOG_FILE:-/dev/null}"
     return "${PIPESTATUS[0]}"
 }
@@ -70,6 +106,7 @@ check_deps() {
     # Use $SUDO_CMD
     if ! command -v docker &>/dev/null; then log "Error: Docker not found." "${C_RED}Error: Docker is not installed...${C_RESET}"; error_found=true; fi
     if ! $SUDO_CMD docker compose version &>/dev/null; then log "Error: Docker Compose V2 not found." "${C_RED}Error: Docker Compose V2 not available...${C_RESET}"; error_found=true; fi
+    if ! command -v openssl &>/dev/null; then log "Error: openssl not found." "${C_RED}Error: 'openssl' is not installed (required for password encryption)...${C_RESET}"; error_found=true; fi
     if $error_found; then exit 1; fi
     log "Dependencies check passed." ""
 }
@@ -85,7 +122,17 @@ discover_apps() {
     local path="$1"; local -n app_array="$2"
     app_array=()
     if [ ! -d "$path" ]; then echo "Warning: Directory not found for discovery: $path" >> "${LOG_FILE:-/dev/null}"; return; fi
-    for dir in "$path"/*; do if [ -d "$dir" ]; then app_array+=("$(basename "$dir")"); fi; done
+    
+    # Note the trailing slash to match only directories
+    for dir in "$path"/*/; do
+        if [ -d "$dir" ]; then
+            # Check if a compose file exists before considering it an app
+            if find_compose_file "${dir%/}" &>/dev/null; then
+                app_array+=("$(basename "$dir")")
+            fi
+        fi
+    done
+    
     IFS=$'\n' app_array=($(sort <<<"${app_array[*]}")); unset IFS
 }
 
@@ -103,7 +150,17 @@ show_selection_menu() {
         echo "Enter a number, (a)ll, (${action_verb:0:1}) to ${action_verb},${extra_options_str} or (q)uit."
         read -rp "Your choice: " choice
         case "$choice" in
-            [sS] | [${action_verb:0:1}]) return 0 ;;
+            [sS] | [${action_verb:0:1}])
+                local any_selected=false
+                for status in "${selected_status_ref[@]}"; do
+                    if $status; then any_selected=true; break; fi
+                done
+                if ! $any_selected; then
+                    echo -e "${C_YELLOW}No items selected. Press Enter to continue...${C_RESET}"; read -r
+                    continue # Go back to the menu loop
+                fi
+                return 0
+                ;;
             [uU]) if [[ "$extra_options_key" == "update" ]]; then return 2; else echo -e "${C_RED}Invalid choice.${C_RESET}"; sleep 1; fi ;;
             [qQ]) return 1 ;;
             [aA])
@@ -145,6 +202,7 @@ initial_setup() {
     local backup_path_def="/home/${CURRENT_USER}/backups/volume-backups"
     local restore_path_def="/home/${CURRENT_USER}/backups/restore-folder"
     local log_dir_def="/home/${CURRENT_USER}/logs/docker_tool_suite"
+    local log_retention_def="30" # New default
     
     echo -e "${C_YELLOW}--- Path Settings ---${C_RESET}"
     read -p "Base Compose Apps Path [${C_GREEN}${apps_path_def}${C_RESET}]: " apps_path; APPS_BASE_PATH=${apps_path:-$apps_path_def}
@@ -152,6 +210,7 @@ initial_setup() {
     read -p "Default Backup Location [${C_GREEN}${backup_path_def}${C_RESET}]: " backup_loc; BACKUP_LOCATION=${backup_loc:-$backup_path_def}
     read -p "Default Restore Location [${C_GREEN}${restore_path_def}${C_RESET}]: " restore_loc; RESTORE_LOCATION=${restore_loc:-$restore_path_def}
     read -p "Log Directory Path [${C_GREEN}${log_dir_def}${C_RESET}]: " log_dir; LOG_DIR=${log_dir:-$log_dir_def}
+    read -p "Log file retention period (days, 0 to disable) [${C_GREEN}${log_retention_def}${C_RESET}]: " log_retention; LOG_RETENTION_DAYS=${log_retention:-$log_retention_def} # New setting
     
     local -a selected_ignored_volumes=()
     read -p $'\n'"Do you want to configure ignored volumes now? (y/N): " config_vols
@@ -160,7 +219,6 @@ initial_setup() {
         interactive_list_builder "Select Volumes to IGNORE during backup" all_volumes selected_ignored_volumes
     fi
     
-    # --- Ignored Images Configuration ---
     local -a selected_ignored_images=()
     read -p $'\n'"Do you want to configure ignored images now? (y/N): " config_imgs
     if [[ "${config_imgs,,}" =~ ^(y|yes)$ ]]; then
@@ -169,8 +227,22 @@ initial_setup() {
     fi
 
     echo -e "\n${C_YELLOW}--- Secure Archive Settings (Optional) ---${C_RESET}"
-    read -sp "Enter a default password for RAR archives (leave blank for none): " rar_pass; echo
-    RAR_PASSWORD=${rar_pass}
+    local rar_pass_1 rar_pass_2 ENCRYPTED_RAR_PASSWORD=""
+    while true; do
+        read -sp "Enter a default password for RAR archives (leave blank for none): " rar_pass_1; echo
+        # If the user leaves the first password blank, skip confirmation.
+        if [[ -z "$rar_pass_1" ]]; then
+            break
+        fi
+        read -sp "Confirm password: " rar_pass_2; echo
+
+        if [[ "$rar_pass_1" == "$rar_pass_2" ]]; then
+            ENCRYPTED_RAR_PASSWORD=$(encrypt_pass "${rar_pass_1}")
+            break
+        else
+            echo -e "${C_RED}Passwords do not match. Please try again.${C_RESET}"
+        fi
+    done
     read -p "Default RAR Compression Level (0-5) [${C_GREEN}3${C_RESET}]: " rar_level
     RAR_COMPRESSION_LEVEL=${rar_level:-3}
     read -p "Delete original backup folder after creating RAR archive? (y/N): " rar_delete_src
@@ -189,7 +261,8 @@ initial_setup() {
     echo -e "    RAR Level:       ${C_GREEN}${RAR_COMPRESSION_LEVEL}${C_RESET}"
     echo -e "    Delete Source:   ${C_GREEN}${RAR_DELETE_SOURCE_AFTER}${C_RESET}"
     echo "  General:"
-    echo -e "    Log Path:        ${C_GREEN}${LOG_DIR}${C_RESET}\n"
+    echo -e "    Log Path:        ${C_GREEN}${LOG_DIR}${C_RESET}"
+    echo -e "    Log Retention:   ${C_GREEN}${LOG_RETENTION_DAYS} days${C_RESET}\n" # New summary line
     
     read -p "Save this configuration? (Y/n): " confirm_setup
     if [[ ! "${confirm_setup,,}" =~ ^(y|yes)$ ]]; then echo -e "\n${C_RED}Setup canceled.${C_RESET}"; exit 0; fi
@@ -199,12 +272,12 @@ initial_setup() {
         echo "# --- Unified Configuration for Docker Tool Suite ---"
         echo
         echo "# --- App Manager ---"
-        echo "APPS_BASE_PATH=\"${APPS_BASE_PATH}\""
-        echo "MANAGED_SUBDIR=\"${MANAGED_SUBDIR}\""
+        printf "APPS_BASE_PATH=%q\n" "${APPS_BASE_PATH}"
+        printf "MANAGED_SUBDIR=%q\n" "${MANAGED_SUBDIR}"
         echo
         echo "# --- Volume Manager ---"
-        echo "BACKUP_LOCATION=\"${BACKUP_LOCATION}\""
-        echo "RESTORE_LOCATION=\"${RESTORE_LOCATION}\""
+        printf "BACKUP_LOCATION=%q\n" "${BACKUP_LOCATION}"
+        printf "RESTORE_LOCATION=%q\n" "${RESTORE_LOCATION}"
         echo "BACKUP_IMAGE=\"docker/alpine-tar-zstd:latest\""
         echo "# List of volumes to ignore during backup."
         echo -n "IGNORED_VOLUMES=("
@@ -214,7 +287,6 @@ initial_setup() {
             printf "\n"; echo "    \"example-of-ignored_volume-1\""
         fi
         echo ")"
-        # --- Save Ignored Images to config ---
         echo
         echo "# List of images to ignore during updates (e.g., custom builds or pinned versions)."
         echo -n "IGNORED_IMAGES=("
@@ -226,12 +298,15 @@ initial_setup() {
         echo ")"
         echo
         echo "# --- Secure Archive (RAR) ---"
-        printf "RAR_PASSWORD=%q\n" "${RAR_PASSWORD}"
+        echo "# RAR Password is encrypted using a machine-specific key."
+        printf "ENCRYPTED_RAR_PASSWORD=%q\n" "${ENCRYPTED_RAR_PASSWORD}"
         echo "RAR_COMPRESSION_LEVEL=${RAR_COMPRESSION_LEVEL}"
         echo "RAR_DELETE_SOURCE_AFTER=${RAR_DELETE_SOURCE_AFTER}"
         echo
         echo "# --- General ---"
-        echo "LOG_DIR=\"${LOG_DIR}\""
+        printf "LOG_DIR=%q\n" "${LOG_DIR}"
+        echo "# Log file retention period in days. Set to 0 to disable automatic pruning." # New config entry
+        printf "LOG_RETENTION_DAYS=%q\n" "${LOG_RETENTION_DAYS}" # New config entry
     } > "${CONFIG_FILE}"
 
     echo -e "${C_YELLOW}Creating directories and setting permissions...${C_RESET}"
@@ -677,7 +752,8 @@ volume_smart_backup_main() {
 
         local project_name; project_name=$($SUDO_CMD docker inspect "$container_id" --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null)
         if [[ -n "$project_name" ]]; then
-            # Add all volumes used by this project to its group
+            # This is where we successfully found a project.
+            echo -e " -> Identified app '${C_BLUE}${project_name}${C_RESET}'. Grouping its associated volumes."
             local project_dir; project_dir=$(_find_project_dir_by_name "$project_name")
             if [[ -n "$project_dir" && ! -v "app_dir_map[$project_name]" ]]; then
                 app_dir_map["$project_name"]="$project_dir"
@@ -693,7 +769,9 @@ volume_smart_backup_main() {
                 fi
             done
         else
+            # This is where the volume is considered standalone.
             standalone_volumes+=("$volume")
+            echo -e " -> Volume '${C_BLUE}${volume}${C_RESET}' is standalone (app may be stopped or it's not a compose volume)."
         fi
     done
     
@@ -753,8 +831,60 @@ volume_smart_backup_main() {
         echo -e "${C_YELLOW}Skipping RAR archive creation.${C_RESET}"; return
     fi
     if ! command -v rar &>/dev/null; then echo -e "\n${C_BOLD_RED}Error: 'rar' command not found...${C_RESET}"; return 1; fi
-    local archive_password="${RAR_PASSWORD-}"; if [[ -z "$archive_password" ]]; then read -sp "Enter password for the archive: " archive_password; echo; fi
-    if [[ -z "$archive_password" ]]; then echo -e "${C_RED}No password provided. Aborting.${C_RESET}"; return; fi
+    
+    local archive_password=""
+    local password_is_set=false
+
+    if [[ -n "${ENCRYPTED_RAR_PASSWORD-}" ]]; then
+        echo -e "\n${C_YELLOW}A default archive password is configured.${C_RESET}"
+        read -p "Choose an option: (U)se default, (E)nter different, (N)o password, (C)ancel: " pass_choice
+        case "${pass_choice,,}" in
+            u|use|"")
+                archive_password=$(decrypt_pass "${ENCRYPTED_RAR_PASSWORD}")
+                if [[ -z "$archive_password" ]]; then
+                    echo -e "${C_BOLD_RED}Error: Failed to decrypt the stored RAR password.${C_RESET}"
+                    echo -e "${C_YELLOW}Please enter the password manually.${C_RESET}"
+                else
+                    echo -e "${C_GREEN}Using the default stored password.${C_RESET}"
+                    password_is_set=true
+                fi
+                ;;
+            e|enter)
+                echo "-> You chose to enter a different password for this backup session."
+                ;; # Fall through to the manual entry block
+            n|no)
+                echo -e "${C_GREEN}Creating archive with no password.${C_RESET}"
+                archive_password=""
+                password_is_set=true
+                ;;
+            c|cancel)
+                echo -e "${C_RED}Archive creation canceled by user.${C_RESET}"; return
+                ;;
+            *)
+                echo -e "${C_RED}Invalid choice. Canceling archive creation.${C_RESET}"; return
+                ;;
+        esac
+    fi
+
+    # If no decision has been made yet, prompt the user to enter a password.
+    if ! $password_is_set; then
+        while true; do
+            read -sp "Enter password for the archive (leave blank for none): " rar_pass_1; echo
+            if [[ -z "$rar_pass_1" ]]; then
+                archive_password=""
+                echo -e "${C_YELLOW}Proceeding without a password.${C_RESET}"
+                break
+            fi
+            read -sp "Confirm password: " rar_pass_2; echo
+
+            if [[ "$rar_pass_1" == "$rar_pass_2" ]]; then
+                archive_password="${rar_pass_1}"
+                break
+            else
+                echo -e "${C_RED}Passwords do not match. Please try again.${C_RESET}"
+            fi
+        done
+    fi
     local archive_name="Apps-backup[$(date +'%d.%m.%Y')].rar"; local archive_path="$(dirname "$backup_dir")/${archive_name}"
     local rar_split_opt=""; local total_size; total_size=$(du -sb "$backup_dir" | awk '{print $1}'); local eight_gb=$((8 * 1024 * 1024 * 1024))
     if (( total_size > eight_gb )); then
@@ -762,8 +892,12 @@ volume_smart_backup_main() {
         if [[ "$(echo "${confirm_split:-y}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|yes)$ ]]; then rar_split_opt="-v8g"; fi
     fi
     echo -e "\n${C_YELLOW}Creating secure RAR archive: ${C_GREEN}${archive_path}${C_RESET}"; echo -e "${C_GRAY}(This may take some time...)${C_RESET}"
-    if execute_and_log rar a -ep1 ${rar_split_opt} "-m${RAR_COMPRESSION_LEVEL:-3}" "-hp${archive_password}" -- "${archive_path}" "${backup_dir}"; then
-        echo -e "${C_GREEN}${TICKMARK} Secure archive created successfully.${C_RESET}";
+    local rar_pass_opt=""
+    if [[ -n "$archive_password" ]]; then
+        rar_pass_opt="-hp${archive_password}"
+    fi
+
+    if execute_and_log rar a -ep1 ${rar_split_opt} "-m${RAR_COMPRESSION_LEVEL:-3}" ${rar_pass_opt} -- "${archive_path}" "${backup_dir}"; then        echo -e "${C_GREEN}${TICKMARK} Secure archive created successfully.${C_RESET}";
         # --- chown globbing for split archives ---
         $SUDO_CMD chown "${CURRENT_USER}:${CURRENT_USER}" "${archive_path%.rar}"*.rar
         local should_delete_source=${RAR_DELETE_SOURCE_AFTER:-false}; local prompt_text="Delete the original backup folder ('${backup_dir}')?"; local prompt_opts=$([[ "$should_delete_source" == "true" ]] && echo "Y/n" || echo "y/N"); read -p "${prompt_text} [${prompt_opts}]: " confirm_del
@@ -865,14 +999,26 @@ system_prune_main() {
     fi
 }
 
-log_viewer_main() {
-    local less_prompt="(Scroll with arrow keys, press 'q' to return to this menu)"
+prune_old_logs() {
+    if [[ -n "${LOG_RETENTION_DAYS-}" && "$LOG_RETENTION_DAYS" -gt 0 ]]; then
+        log "Checking for old log files to prune (older than $LOG_RETENTION_DAYS days)..."
+        local deleted_count
+        deleted_count=$(find "$LOG_DIR" -name "*.log" -type f -mtime +"$LOG_RETENTION_DAYS" -print | wc -l)
+        if [[ "$deleted_count" -gt 0 ]]; then
+            find "$LOG_DIR" -name "*.log" -type f -mtime +"$LOG_RETENTION_DAYS" -delete
+            log "Pruned $deleted_count old log file(s)."
+        fi
+    fi
+}
+
+_log_viewer_select_and_view() {
+    local less_prompt="(Scroll with arrow keys, press 'q' to return)"
     while true; do
         clear
         mapfile -t log_files < <(find "$LOG_DIR" -name "*.log" -type f | sort -r)
 
         if [ ${#log_files[@]} -eq 0 ]; then
-            echo -e "${C_YELLOW}No log files found in ${LOG_DIR}.${C_RESET}"; sleep 2; return
+            echo -e "${C_YELLOW}No log files found to view.${C_RESET}"; sleep 2; return
         fi
 
         echo -e "${C_YELLOW}--- Log Viewer ---${C_RESET}\nSelect a log file to view:"
@@ -881,15 +1027,15 @@ log_viewer_main() {
         for file in "${log_files[@]}"; do
             display_options+=("$(realpath --relative-to="$LOG_DIR" "$file")")
         done
-        display_options+=("Return to Main Menu")
+        display_options+=("Return to Log Manager")
         
         PS3=$'\n'"Enter your choice: "
         select choice in "${display_options[@]}"; do
-            if [[ "$choice" == "Return to Main Menu" ]]; then
+            if [[ "$choice" == "Return to Log Manager" ]]; then
                 return
             elif [[ -n "$choice" ]]; then
                 local idx=$((REPLY - 1))
-                less -RFX --prompt="$less_prompt" "${log_files[$idx]}"
+                less -RX --prompt="$less_prompt" "${log_files[$idx]}"
                 break
             else
                 echo -e "${C_RED}Invalid option. Please try again.${C_RESET}"; sleep 1; break
@@ -898,6 +1044,272 @@ log_viewer_main() {
     done
 }
 
+log_remover_main() {
+    clear
+    mapfile -t log_files < <(find "$LOG_DIR" -name "*.log" -type f | sort -r)
+    if [ ${#log_files[@]} -eq 0 ]; then echo -e "${C_YELLOW}No log files found to delete.${C_RESET}"; sleep 2; return; fi
+
+    local -a file_display_names=(); for file in "${log_files[@]}"; do file_display_names+=("$(realpath --relative-to="$LOG_DIR" "$file")"); done
+    local -a selected_status=(); for ((i=0; i<${#log_files[@]}; i++)); do selected_status+=("false"); done
+
+    if ! show_selection_menu "Select logs to DELETE" "delete" file_display_names selected_status; then
+        echo -e "${C_YELLOW}Deletion canceled.${C_RESET}"; sleep 1; return
+    fi
+    
+    local -a files_to_delete=()
+    for i in "${!log_files[@]}"; do if ${selected_status[$i]}; then files_to_delete+=("${log_files[$i]}"); fi; done
+    if [ ${#files_to_delete[@]} -eq 0 ]; then echo -e "\n${C_YELLOW}No logs selected.${C_RESET}"; sleep 1; return; fi
+
+    echo -e "\n${C_BOLD_RED}You are about to permanently delete ${#files_to_delete[@]} log file(s).${C_RESET}"
+    read -p "Are you sure? [y/N]: " confirm
+    if [[ ! "${confirm,,}" =~ ^(y|yes)$ ]]; then echo -e "${C_RED}Deletion canceled.${C_RESET}"; sleep 1; return; fi
+    
+    echo ""
+    for file in "${files_to_delete[@]}"; do
+        if rm "$file"; then
+            log "Deleted log file: $file" "-> Deleted ${C_BLUE}$(basename "$file")${C_RESET}"
+        else
+            log "ERROR: Failed to delete log file: $file" "-> ${C_RED}Failed to delete $(basename "$file")${C_RESET}"
+        fi
+    done
+    echo -e "\n${C_GREEN}Deletion complete.${C_RESET}"
+}
+
+log_manager_menu() {
+    local options=("View Logs" "Delete Logs" "Return to Main Menu")
+    while true; do
+        clear
+        echo -e "==============================================\n   ${C_GREEN}Log Manager${C_RESET}\n=============================================="
+        for i in "${!options[@]}"; do echo -e " ${C_YELLOW}$((i+1)))${C_RESET} ${options[$i]}"; done
+        echo "----------------------------------------------"
+        read -rp "Please select an option: " choice
+        case "$choice" in
+            1) _log_viewer_select_and_view ;;
+            2) log_remover_main; echo -e "\nPress Enter to return..."; read -r ;;
+            3) return ;;
+            *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
+        esac
+    done
+}
+
+update_secure_archive_settings() {
+    check_root
+    clear
+    echo -e "${C_YELLOW}--- Update Secure Archive Password ---${C_RESET}\n"
+    
+    local rar_pass_1 rar_pass_2 ENCRYPTED_RAR_PASSWORD=""
+    while true; do
+        read -sp "Enter a new password (leave blank to remove, or type 'cancel' to exit): " rar_pass_1; echo
+        
+        # --- ADD THIS BLOCK ---
+        if [[ "${rar_pass_1,,}" == "cancel" ]]; then
+            echo -e "${C_YELLOW}Operation cancelled. No changes were made.${C_RESET}"
+            return
+        fi
+        # --- END OF ADDED BLOCK ---
+
+        if [[ -z "$rar_pass_1" ]]; then
+            # User wants to remove the password
+            break
+        fi
+        read -sp "Confirm new password: " rar_pass_2; echo
+
+        if [[ "$rar_pass_1" == "$rar_pass_2" ]]; then
+            ENCRYPTED_RAR_PASSWORD=$(encrypt_pass "${rar_pass_1}")
+            break
+        else
+            echo -e "${C_RED}Passwords do not match. Please try again.${C_RESET}"
+        fi
+    done
+
+    echo -e "\n${C_YELLOW}Updating configuration file...${C_RESET}"
+    local new_config_line="ENCRYPTED_RAR_PASSWORD=${ENCRYPTED_RAR_PASSWORD}"
+
+    # Use sed to replace the line in-place if it exists, otherwise append it.
+    if grep -q "^ENCRYPTED_RAR_PASSWORD=" "$CONFIG_FILE"; then
+        # Using a temporary variable to handle potential special characters for sed
+        local replacement; replacement=$(printf "%q" "$ENCRYPTED_RAR_PASSWORD")
+        sed -i "/^ENCRYPTED_RAR_PASSWORD=/c\ENCRYPTED_RAR_PASSWORD=${replacement}" "$CONFIG_FILE"
+    else
+        echo -e "\n# RAR Password is encrypted using a machine-specific key." >> "$CONFIG_FILE"
+        echo "$new_config_line" >> "$CONFIG_FILE"
+    fi
+    
+    # Reload the config into the current script session
+    source "$CONFIG_FILE"
+
+    if [[ -z "$ENCRYPTED_RAR_PASSWORD" ]]; then
+        echo -e "${C_GREEN}${TICKMARK} Default archive password has been removed.${C_RESET}"
+    else
+        echo -e "${C_GREEN}${TICKMARK} Archive password updated successfully.${C_RESET}"
+    fi
+}
+
+utility_menu() {
+    local options=(
+        "Log Manager"
+        "Clean Up Docker System"
+        "Manage Settings"
+        "Return to Main Menu"
+    )
+    while true; do
+        clear
+        echo -e "==============================================\n   ${C_GREEN}Utilities${C_RESET}\n=============================================="
+        for i in "${!options[@]}"; do echo -e " ${C_YELLOW}$((i+1)))${C_RESET} ${options[$i]}"; done
+        echo "----------------------------------------------"
+        read -rp "Please select an option: " choice
+        case "$choice" in
+            1) log_manager_menu ;;
+            2) system_prune_main; echo -e "\nPress Enter to return..."; read -r ;;
+            3) settings_manager_menu ;;
+            4) return ;;
+            *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
+        esac
+    done
+}
+
+_update_config_value() {
+    local key="$1"
+    local prompt_text="$2"
+    local current_value="${3-}"
+    local new_value
+
+    read -p "$prompt_text [${C_GREEN}${current_value}${C_RESET}]: " new_value
+    new_value=${new_value:-$current_value}
+
+    # Use sed to replace the line in-place if it exists, otherwise append it.
+    if grep -q "^${key}=" "$CONFIG_FILE"; then
+        # Use a temporary variable to handle potential special characters for sed
+        local replacement; replacement=$(printf "%q" "$new_value")
+        sed -i "/^${key}=/c\\${key}=${replacement}" "$CONFIG_FILE"
+    else
+        echo "${key}=$(printf "%q" "$new_value")" >> "$CONFIG_FILE"
+    fi
+    
+    echo -e "${C_GREEN}${TICKMARK} Setting '${key}' updated.${C_RESET}"
+    # Reload the config into the current script session to reflect changes immediately
+    source "$CONFIG_FILE"
+}
+
+update_ignored_items() {
+    local item_type="$1" # "Volumes" or "Images"
+    local -n source_items_ref="$2"
+    local -n ignored_items_ref="$3"
+    
+    check_root
+    
+    # --- CHANGE START ---
+    # 1. Combine the live list from Docker with the already configured ignored list.
+    #    This ensures your custom entries are preserved and displayed.
+    local -a combined_list=("${source_items_ref[@]}" "${ignored_items_ref[@]}")
+    mapfile -t all_available_items < <(printf "%s\n" "${combined_list[@]}" | sort -u)
+    
+    if [[ ${#all_available_items[@]} -eq 0 ]]; then
+    # --- CHANGE END ---
+        echo -e "${C_YELLOW}No Docker ${item_type,,} found to configure.${C_RESET}"; sleep 2; return
+    fi
+
+    local -a selected_status=()
+    # Check against the combined list
+    for item in "${all_available_items[@]}"; do
+        if [[ " ${ignored_items_ref[*]} " =~ " ${item} " ]]; then
+            selected_status+=("true")
+        else
+            selected_status+=("false")
+        fi
+    done
+
+    local -a new_ignored_list=()
+    local title="Select ${item_type} to IGNORE"
+    
+    # Use the combined list for the menu
+    if ! show_selection_menu "$title" "confirm" all_available_items selected_status; then
+        echo -e "${C_YELLOW}Update cancelled.${C_RESET}"; return
+    fi
+
+    for i in "${!all_available_items[@]}"; do
+        if ${selected_status[$i]}; then new_ignored_list+=("${all_available_items[$i]}"); fi
+    done
+    
+    # --- CHANGE START ---
+    # 2. Improve the sed command to also remove the comment line associated with the block.
+    #    This prevents duplicate comments and keeps the config file cleaner.
+    local config_key="IGNORED_${item_type^^}"
+    # This regex looks for the comment line and deletes from there to the closing parenthesis.
+    sed -i "/# List of ${item_type,,} to ignore/,/)/d" "$CONFIG_FILE"
+    # --- CHANGE END ---
+
+    {
+        # Re-add the block to the end of the file. While this still "moves" the block,
+        # it now correctly cleans up the old location, solving the main issue.
+        echo "# List of ${item_type,,} to ignore during operations."
+        echo -n "${config_key}=("
+        if [ ${#new_ignored_list[@]} -gt 0 ]; then
+            printf "\n"
+            for item in "${new_ignored_list[@]}"; do echo "    \"$item\""; done
+        fi
+        echo ")"
+        echo
+    } >> "$CONFIG_FILE"
+
+    echo -e "${C_GREEN}${TICKMARK} Ignored ${item_type,,} list updated successfully.${C_RESET}"
+    source "$CONFIG_FILE"
+}
+
+settings_manager_menu() {
+    local options=(
+        "Manage Path Settings"
+        "Manage Ignored Volumes"
+        "Manage Ignored Images"
+        "Manage Archive Settings"
+        "Return to Utilities"
+    )
+    while true; do
+        clear
+        echo -e "==============================================\n   ${C_GREEN}Settings Manager${C_RESET}\n=============================================="
+        for i in "${!options[@]}"; do echo -e " ${C_YELLOW}$((i+1)))${C_RESET} ${options[$i]}"; done
+        echo "----------------------------------------------"
+        read -rp "Please select an option: " choice
+        
+        case "$choice" in
+            1) # Path Settings
+                clear; echo -e "${C_YELLOW}--- Path Settings ---${C_RESET}"
+                _update_config_value "APPS_BASE_PATH" "Base Compose Apps Path" "$APPS_BASE_PATH"
+                _update_config_value "MANAGED_SUBDIR" "Managed Apps Subdirectory" "$MANAGED_SUBDIR"
+                _update_config_value "BACKUP_LOCATION" "Default Backup Location" "$BACKUP_LOCATION"
+                _update_config_value "RESTORE_LOCATION" "Default Restore Location" "$RESTORE_LOCATION"
+                _update_config_value "LOG_DIR" "Log Directory Path" "$LOG_DIR"
+                echo -e "\n${C_BLUE}Path settings updated. Press Enter...${C_RESET}"; read -r
+                ;;
+            2) # Ignored Volumes
+                local -a all_volumes; mapfile -t all_volumes < <($SUDO_CMD docker volume ls --format "{{.Name}}" | sort)
+                update_ignored_items "Volumes" "all_volumes" "IGNORED_VOLUMES"
+                echo -e "\nPress Enter to return..."; read -r
+                ;;
+            3) # Ignored Images
+                local -a all_images; mapfile -t all_images < <($SUDO_CMD docker image ls --format "{{.Repository}}:{{.Tag}}" | grep -v "<none>" | sort)
+                update_ignored_items "Images" "all_images" "IGNORED_IMAGES"
+                echo -e "\nPress Enter to return..."; read -r
+                ;;
+            4) # Archive Settings
+                clear; echo -e "${C_YELLOW}--- Archive Settings ---${C_RESET}"
+                update_secure_archive_settings
+                _update_config_value "RAR_COMPRESSION_LEVEL" "Default RAR Compression Level (0-5)" "${RAR_COMPRESSION_LEVEL:-3}"
+                
+                local current_delete_val=${RAR_DELETE_SOURCE_AFTER:-false}
+                read -p "Delete original backup folder after archiving? (y/N) [Current: ${C_GREEN}${current_delete_val}${C_RESET}]: " rar_delete
+                local new_val=$([[ "${rar_delete,,}" =~ ^(y|yes)$ ]] && echo "true" || echo "false")
+                sed -i "/^RAR_DELETE_SOURCE_AFTER=/c\RAR_DELETE_SOURCE_AFTER=${new_val}" "$CONFIG_FILE"
+                source "$CONFIG_FILE"
+                echo -e "${C_GREEN}${TICKMARK} Setting 'RAR_DELETE_SOURCE_AFTER' updated.${C_RESET}"
+
+                echo -e "\n${C_BLUE}Archive settings updated. Press Enter...${C_RESET}"; read -r
+                ;;
+            5) return ;;
+            *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
+        esac
+    done
+}
 
 # ======================================================================================
 # --- SECTION 6: MAIN SCRIPT EXECUTION ---
@@ -909,17 +1321,15 @@ main_menu() {
         echo -e "==============================================\n   ${C_GREEN}Docker Tool Suite${C_RESET} - Welcome, ${C_BLUE}${CURRENT_USER}${C_RESET}\n=============================================="
         echo -e " ${C_YELLOW}1)${C_RESET} Application Manager"
         echo -e " ${C_YELLOW}2)${C_RESET} Volume Manager"
-        echo -e " ${C_YELLOW}3)${C_RESET} View Logs"
-        echo -e " ${C_YELLOW}4)${C_RESET} Clean Up Docker System"
-        echo -e " ${C_YELLOW}5)${C_RESET} Quit"
+        echo -e " ${C_YELLOW}3)${C_RESET} Utilities"
+        echo -e " ${C_YELLOW}4)${C_RESET} Quit"
         echo "----------------------------------------------"
-        read -rp "Please select an option [1-5]: " choice
+        read -rp "Please select an option [1-4]: " choice
         case "$choice" in
             1) app_manager_menu ;;
             2) volume_manager_menu ;;
-            3) log_viewer_main ;;
-            4) system_prune_main; echo -e "\nPress Enter to return..."; read -r ;;
-            5) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
+            3) utility_menu ;;
+            4) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
             *) echo -e "\n${C_RED}Invalid option: '$choice'.${C_RESET}"; sleep 1 ;;
         esac
     done
@@ -929,6 +1339,7 @@ if [[ $# -gt 0 ]]; then
     if [[ ! -f "$CONFIG_FILE" ]]; then echo -e "${C_RED}Config not found. Please run with 'sudo' for initial setup.${C_RESET}"; exit 1; fi
     source "$CONFIG_FILE"
     LOG_FILE="$LOG_DIR/$(date +'%Y-%m-%d').log"; mkdir -p "$LOG_DIR"
+    prune_old_logs
     case "$1" in
         update)
             shift; [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=true
@@ -945,5 +1356,6 @@ fi
 
 source "$CONFIG_FILE"
 LOG_FILE="$LOG_DIR/$(date +'%Y-%m-%d').log"; mkdir -p "$LOG_DIR"
+prune_old_logs
 check_deps
 main_menu
