@@ -1,6 +1,6 @@
 #!/bin/bash
 # ======================================================================================
-# Docker Tool Suite v1.3.4
+# Docker Tool Suite v1.3.6
 # ======================================================================================
 
 # --- Strict Mode & Globals ---
@@ -202,7 +202,7 @@ initial_setup() {
     local backup_path_def="/home/${CURRENT_USER}/backups/volume-backups"
     local restore_path_def="/home/${CURRENT_USER}/backups/restore-folder"
     local log_dir_def="/home/${CURRENT_USER}/logs/docker_tool_suite"
-    local log_retention_def="30" # New default
+    local log_retention_def="30"
     
     echo -e "${C_YELLOW}--- Path Settings ---${C_RESET}"
     read -p "Base Compose Apps Path [${C_GREEN}${apps_path_def}${C_RESET}]: " apps_path; APPS_BASE_PATH=${apps_path:-$apps_path_def}
@@ -262,7 +262,7 @@ initial_setup() {
     echo -e "    Delete Source:   ${C_GREEN}${RAR_DELETE_SOURCE_AFTER}${C_RESET}"
     echo "  General:"
     echo -e "    Log Path:        ${C_GREEN}${LOG_DIR}${C_RESET}"
-    echo -e "    Log Retention:   ${C_GREEN}${LOG_RETENTION_DAYS} days${C_RESET}\n" # New summary line
+    echo -e "    Log Retention:   ${C_GREEN}${LOG_RETENTION_DAYS} days${C_RESET}\n"
     
     read -p "Save this configuration? (Y/n): " confirm_setup
     if [[ ! "${confirm_setup,,}" =~ ^(y|yes)$ ]]; then echo -e "\n${C_RED}Setup canceled.${C_RESET}"; exit 0; fi
@@ -305,8 +305,8 @@ initial_setup() {
         echo
         echo "# --- General ---"
         printf "LOG_DIR=%q\n" "${LOG_DIR}"
-        echo "# Log file retention period in days. Set to 0 to disable automatic pruning." # New config entry
-        printf "LOG_RETENTION_DAYS=%q\n" "${LOG_RETENTION_DAYS}" # New config entry
+        echo "# Log file retention period in days. Set to 0 to disable automatic pruning."
+        printf "LOG_RETENTION_DAYS=%q\n" "${LOG_RETENTION_DAYS}"
     } > "${CONFIG_FILE}"
 
     echo -e "${C_YELLOW}Creating directories and setting permissions...${C_RESET}"
@@ -563,8 +563,16 @@ app_manager_interactive_handler() {
 
 app_manager_update_all_known_apps() {
     check_root
-    log "Starting update for all KNOWN applications..."
-    
+    log "Starting update for RUNNING applications..."
+
+    # --- Using a more compatible method to find running projects ---
+    log "Discovering currently running Docker Compose projects..."
+    declare -A running_projects
+    # Get all projects, find the ones with "running" status, and extract their names (the first column).
+    while read -r proj; do
+        [[ -n "$proj" ]] && running_projects["$proj"]=1
+    done < <($SUDO_CMD docker compose ls | grep 'running' | awk '{print $1}')
+
     local -a essential_apps; discover_apps "$APPS_BASE_PATH" essential_apps
     local -a managed_apps; discover_apps "$APPS_BASE_PATH/$MANAGED_SUBDIR" managed_apps
 
@@ -572,22 +580,30 @@ app_manager_update_all_known_apps() {
         log "No applications found in any directory." "${C_YELLOW}No applications found to update.${C_RESET}"
         return
     fi
-    
-    log "Found essential and managed apps. Starting update process..." "${C_GREEN}Updating all known applications...${C_RESET}"
+
+    log "Found essential and managed apps. Starting update process for running apps only..." "${C_GREEN}Updating all RUNNING applications...${C_RESET}"
 
     for app in "${essential_apps[@]}"; do
         if [[ "$app" != "$MANAGED_SUBDIR" ]]; then
-            echo -e "\n${C_BLUE}--- Updating Essential App: ${C_YELLOW}${app}${C_BLUE} ---${C_RESET}"
-            _update_app_task "$app" "$APPS_BASE_PATH/$app"
+            if [[ -v running_projects[$app] ]]; then
+                echo -e "\n${C_BLUE}--- Updating RUNNING Essential App: ${C_YELLOW}${app}${C_BLUE} ---${C_RESET}"
+                _update_app_task "$app" "$APPS_BASE_PATH/$app"
+            else
+                log "Skipping update for stopped essential app: $app"
+            fi
         fi
     done
 
     for app in "${managed_apps[@]}"; do
-        echo -e "\n${C_BLUE}--- Updating Managed App: ${C_YELLOW}${app}${C_BLUE} ---${C_RESET}"
-        _update_app_task "$app" "$APPS_BASE_PATH/$MANAGED_SUBDIR/$app"
+        if [[ -v running_projects[$app] ]]; then
+            echo -e "\n${C_BLUE}--- Updating RUNNING Managed App: ${C_YELLOW}${app}${C_BLUE} ---${C_RESET}"
+            _update_app_task "$app" "$APPS_BASE_PATH/$MANAGED_SUBDIR/$app"
+        else
+            log "Skipping update for stopped managed app: $app"
+        fi
     done
 
-    log "Finished update task for all known applications." "${C_GREEN}\nFull update task finished.${C_RESET}"
+    log "Finished update task for all running applications." "${C_GREEN}\nFull update task finished.${C_RESET}"
 }
 
 app_manager_stop_all() {
@@ -622,7 +638,15 @@ app_manager_menu() {
             1) app_manager_status ;;
             2) app_manager_interactive_handler "Essential" "$APPS_BASE_PATH" "$APPS_BASE_PATH" ;;
             3) app_manager_interactive_handler "Managed" "$APPS_BASE_PATH/$MANAGED_SUBDIR" "$APPS_BASE_PATH/$MANAGED_SUBDIR" ;;
-            4) app_manager_stop_all; echo -e "\n${C_BLUE}Task complete. Press Enter...${C_RESET}"; read -r ;;
+            4) 
+                read -r -p "$(printf "\n${C_BOLD_RED}This will stop ALL running compose applications. Are you sure? [y/N]: ${C_RESET}")" confirm
+                if [[ "${confirm,,}" =~ ^(y|yes)$ ]]; then
+                    app_manager_stop_all
+                else
+                    echo -e "\n${C_YELLOW}Operation canceled.${C_RESET}"
+                fi
+                echo -e "\n${C_BLUE}Task complete. Press Enter...${C_RESET}"; read -r
+                ;;
             5) return ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
         esac
@@ -1101,12 +1125,10 @@ update_secure_archive_settings() {
     while true; do
         read -sp "Enter a new password (leave blank to remove, or type 'cancel' to exit): " rar_pass_1; echo
         
-        # --- ADD THIS BLOCK ---
         if [[ "${rar_pass_1,,}" == "cancel" ]]; then
             echo -e "${C_YELLOW}Operation cancelled. No changes were made.${C_RESET}"
             return
         fi
-        # --- END OF ADDED BLOCK ---
 
         if [[ -z "$rar_pass_1" ]]; then
             # User wants to remove the password
@@ -1145,10 +1167,145 @@ update_secure_archive_settings() {
     fi
 }
 
+# --- Unused Image Updater Function ---
+update_unused_images_main() {
+    local is_cron_run=false
+    if [[ "${1-}" == "cron" ]]; then is_cron_run=true; fi
+
+    check_root
+    if ! $is_cron_run; then clear; fi
+    log "Starting unused image update script." "${C_GREEN}--- Starting Unused Docker Image Updater ---${C_RESET}"
+    if $DRY_RUN; then log "--- Starting in Dry Run mode. No changes will be made. ---" "${C_GRAY}[DRY RUN] No changes will be made.${C_RESET}"; fi
+
+    # Convert IGNORED_IMAGES array to a grep pattern
+    local ignored_pattern
+    if [[ ${#IGNORED_IMAGES[@]} -gt 0 ]]; then
+        ignored_pattern=$(IFS="|"; echo "${IGNORED_IMAGES[*]}")
+    else
+        ignored_pattern="^$" # A pattern that matches nothing
+    fi
+
+    local total_images_scanned=0 used_count=0 ignored_count=0 unpullable_count=0
+
+    log "Finding images used by existing containers (running or stopped)..." "${C_GRAY} -> Finding images used by existing containers...${C_RESET}"
+    local used_image_ids
+    used_image_ids=$($SUDO_CMD docker ps -aq | xargs -r $SUDO_CMD docker inspect --format='{{.Image}}' | sed 's/sha256://' | cut -c1-12 | sort -u)
+
+    local -a images_to_update=()
+    log "Scanning all local images to find unused ones..." "${C_GRAY} -> Scanning all local images...${C_RESET}"
+    
+    while read -r image_id image_name; do
+        total_images_scanned=$((total_images_scanned + 1))
+        
+        if echo "$used_image_ids" | grep -qx "$image_id"; then
+            log "Skipping used image: $image_name (ID: $image_id)"
+            used_count=$((used_count + 1))
+            continue
+        fi
+        
+        if [[ ${#IGNORED_IMAGES[@]} -gt 0 ]] && echo "$image_name" | grep -qE "$ignored_pattern"; then
+            log "Skipping ignored image: $image_name"
+            ignored_count=$((ignored_count + 1))
+            continue
+        fi
+
+        if [[ "$image_name" == "<none>:<none>" ]]; then
+            log "Skipping unpullable image: $image_name (ID: $image_id)"
+            unpullable_count=$((unpullable_count + 1))
+            continue
+        fi
+        
+        images_to_update+=("$image_name")
+    done < <($SUDO_CMD docker images --format '{{.ID}} {{.Repository}}:{{.Tag}}')
+
+    if [ ${#images_to_update[@]} -gt 0 ]; then
+        log "Found ${#images_to_update[@]} unused images to update. Starting parallel pulls..." "${C_BLUE}Found ${#images_to_update[@]} images to update. Pulling...${C_RESET}"
+        for image in "${images_to_update[@]}"; do
+            (
+                log "Updating unused image: $image"
+                execute_and_log $SUDO_CMD docker pull "$image"
+            ) &
+        done
+        wait # Wait for all background pull jobs to finish
+        log "All image updates are complete." "${C_GREEN}All image pulls are complete.${C_RESET}"
+    else
+        log "No unused images found to update." "${C_YELLOW}No unused images found to update.${C_RESET}"
+    fi
+
+    local updated_count=${#images_to_update[@]}
+    log "Cleaning up old, dangling images..." "${C_BLUE}Cleaning up old, dangling images...${C_RESET}"
+    execute_and_log $SUDO_CMD docker image prune -f
+
+    echo -e "\n${C_GREEN}--- Update Summary ---${C_RESET}"
+    echo "  Total images scanned: ${C_BLUE}$total_images_scanned${C_RESET}"
+    if $DRY_RUN; then echo "  Images that would be updated: ${C_BLUE}$updated_count${C_RESET}"; else echo "  Images updated: ${C_BLUE}$updated_count${C_RESET}"; fi
+    echo "  Images skipped (in use): ${C_YELLOW}$used_count${C_RESET}"
+    echo "  Images skipped (on ignore list): ${C_YELLOW}$ignored_count${C_RESET}"
+    echo "  Images skipped (un-pullable): ${C_YELLOW}$unpullable_count${C_RESET}"
+    log "--- Update Summary ---"; log "Total images scanned: $total_images_scanned"; log "Images updated/to be updated: $updated_count"; log "Images skipped (in use): $used_count"; log "Images skipped (on ignore list): $ignored_count"; log "Images skipped (un-pullable): $unpullable_count"; log "Script finished."
+}
+
+# --- Cron Job Setup for Unused Image Updater ---
+setup_unused_images_cron_job() {
+    check_root
+    echo -e "\n${C_YELLOW}--- Schedule Automatic Unused Image Updates ---${C_RESET}"
+    read -p "Would you like to schedule the unused image updater to run automatically? (Y/n): " schedule_now
+    if [[ ! "$(echo "${schedule_now:-y}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|yes)$ ]]; then
+        echo -e "${C_YELLOW}Skipping cron job setup.${C_RESET}"; return
+    fi
+    
+    local cron_target_user="root"
+    echo "The script needs Docker permissions to run. We recommend running the scheduled task as 'root'."
+    read -p "Run the scheduled task as 'root'? (Y/n): " confirm_root
+    if [[ ! "$(echo "${confirm_root:-y}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|yes)$ ]]; then
+        echo -e "${C_YELLOW}Cron job setup canceled.${C_RESET}"; return
+    fi
+
+    local cron_schedule=""
+    while true; do
+        clear; echo -e "${C_YELLOW}Choose a schedule for the unused image updater (for user: ${C_GREEN}$cron_target_user${C_YELLOW}):${C_RESET}\n"
+        echo "   1) Every day (at 03:00)      3) Weekly (Sunday at 03:00)"
+        echo "   2) Every 3 days (at 03:00)   4) Custom"
+        echo "   5) Cancel"
+        read -p "Enter your choice [1-5]: " choice
+        case $choice in
+            1) cron_schedule="0 3 * * *"; break ;;
+            2) cron_schedule="0 3 */3 * *"; break ;;
+            3) cron_schedule="0 3 * * 0"; break ;;
+            4) 
+               read -p "Enter custom cron schedule (e.g., '0 5 * * *' for 5 AM daily): " custom_cron
+               if [[ -n "$custom_cron" ]]; then cron_schedule="$custom_cron"; break; fi ;;
+            5) echo -e "${C_YELLOW}Cron job setup canceled.${C_RESET}"; return ;;
+            *) echo -e "${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
+        esac
+    done
+
+    echo -e "\n${C_YELLOW}Adding job to root's crontab...${C_RESET}"
+    local cron_command="$cron_schedule $SUDO_CMD $SCRIPT_PATH update-unused --cron"
+    local cron_comment="# Added by Docker Tool Suite to update unused Docker images"
+    
+    local current_crontab; current_crontab=$(crontab -u "$cron_target_user" -l 2>/dev/null || true)
+    
+    if echo "$current_crontab" | grep -Fq "update-unused"; then
+        echo -e "${C_YELLOW}A cron job for this task already exists. Skipping.${C_RESET}"
+    else
+        local new_crontab
+        new_crontab=$(printf "%s\n%s\n%s\n" "$current_crontab" "$cron_comment" "$cron_command")
+
+        if ! echo "$new_crontab" | crontab -u "$cron_target_user" -; then
+            echo -e "${C_RED}Error: Failed to install the cron job. The schedule '$cron_schedule' might be invalid.${C_RESET}"
+            echo -e "${C_YELLOW}Crontab was not modified.${C_RESET}"
+            return 1
+        fi
+        echo -e "${C_GREEN}${TICKMARK} Cron job added successfully!${C_RESET}"
+    fi
+}
+
 utility_menu() {
     local options=(
         "Log Manager"
         "Clean Up Docker System"
+        "Update Unused Images"
         "Manage Settings"
         "Return to Main Menu"
     )
@@ -1161,8 +1318,9 @@ utility_menu() {
         case "$choice" in
             1) log_manager_menu ;;
             2) system_prune_main; echo -e "\nPress Enter to return..."; read -r ;;
-            3) settings_manager_menu ;;
-            4) return ;;
+            3) update_unused_images_main; echo -e "\nPress Enter to return..."; read -r ;;
+            4) settings_manager_menu ;;
+            5) return ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
         esac
     done
@@ -1198,14 +1356,12 @@ update_ignored_items() {
     
     check_root
     
-    # --- CHANGE START ---
     # 1. Combine the live list from Docker with the already configured ignored list.
-    #    This ensures your custom entries are preserved and displayed.
+    #    This ensures custom entries are preserved and displayed.
     local -a combined_list=("${source_items_ref[@]}" "${ignored_items_ref[@]}")
     mapfile -t all_available_items < <(printf "%s\n" "${combined_list[@]}" | sort -u)
     
     if [[ ${#all_available_items[@]} -eq 0 ]]; then
-    # --- CHANGE END ---
         echo -e "${C_YELLOW}No Docker ${item_type,,} found to configure.${C_RESET}"; sleep 2; return
     fi
 
@@ -1231,13 +1387,11 @@ update_ignored_items() {
         if ${selected_status[$i]}; then new_ignored_list+=("${all_available_items[$i]}"); fi
     done
     
-    # --- CHANGE START ---
     # 2. Improve the sed command to also remove the comment line associated with the block.
     #    This prevents duplicate comments and keeps the config file cleaner.
     local config_key="IGNORED_${item_type^^}"
     # This regex looks for the comment line and deletes from there to the closing parenthesis.
     sed -i "/# List of ${item_type,,} to ignore/,/)/d" "$CONFIG_FILE"
-    # --- CHANGE END ---
 
     {
         # Re-add the block to the end of the file. While this still "moves" the block,
@@ -1262,6 +1416,7 @@ settings_manager_menu() {
         "Manage Ignored Volumes"
         "Manage Ignored Images"
         "Manage Archive Settings"
+        "Schedule Unused Image Updater"
         "Return to Utilities"
     )
     while true; do
@@ -1305,7 +1460,11 @@ settings_manager_menu() {
 
                 echo -e "\n${C_BLUE}Archive settings updated. Press Enter...${C_RESET}"; read -r
                 ;;
-            5) return ;;
+            5) # Schedule Unused Image Updater
+                setup_unused_images_cron_job
+                echo -e "\nPress Enter to return..."; read -r
+                ;;
+            6) return ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
         esac
     done
@@ -1335,6 +1494,7 @@ main_menu() {
     done
 }
 
+# --- Argument Parsing at script entry ---
 if [[ $# -gt 0 ]]; then
     if [[ ! -f "$CONFIG_FILE" ]]; then echo -e "${C_RED}Config not found. Please run with 'sudo' for initial setup.${C_RESET}"; exit 1; fi
     source "$CONFIG_FILE"
@@ -1346,7 +1506,25 @@ if [[ $# -gt 0 ]]; then
             [[ "${1:-}" == "--cron" ]] && echo "--- Running in automated cron mode ---" >> "$LOG_FILE"
             app_manager_update_all_known_apps
             exit 0 ;;
-        *) echo "Unknown command: $1"; echo "Usage: $0 [update|--help]"; exit 1 ;;
+        update-unused)
+            shift # Move past 'update-unused'
+            is_cron=false
+            # Loop through remaining arguments
+            while (( "$#" )); do
+              case "$1" in
+                --dry-run) DRY_RUN=true; shift ;;
+                --cron) is_cron=true; shift ;;
+                *) echo "Unknown option for update-unused: $1"; exit 1 ;;
+              esac
+            done
+            if $is_cron; then
+              echo "--- Running unused image update in automated cron mode ---" >> "$LOG_FILE"
+              update_unused_images_main "cron"
+            else
+              update_unused_images_main
+            fi
+            exit 0 ;;
+        *) echo "Unknown command: $1"; echo "Usage: $0 [update|update-unused|--help]"; exit 1 ;;
     esac
 fi
 
