@@ -1,6 +1,6 @@
 #!/bin/bash
 # ======================================================================================
-# Docker Tool Suite v1.3.6
+# Docker Tool Suite v1.3.7
 # ======================================================================================
 
 # --- Strict Mode & Globals ---
@@ -107,6 +107,7 @@ check_deps() {
     if ! command -v docker &>/dev/null; then log "Error: Docker not found." "${C_RED}Error: Docker is not installed...${C_RESET}"; error_found=true; fi
     if ! $SUDO_CMD docker compose version &>/dev/null; then log "Error: Docker Compose V2 not found." "${C_RED}Error: Docker Compose V2 not available...${C_RESET}"; error_found=true; fi
     if ! command -v openssl &>/dev/null; then log "Error: openssl not found." "${C_RED}Error: 'openssl' is not installed (required for password encryption)...${C_RESET}"; error_found=true; fi
+    if ! command -v rar &>/dev/null; then log "Warning: 'rar' command not found." "${C_YELLOW}Warning: 'rar' is not installed (optional, for creating secure archives)...${C_RESET}"; fi
     if $error_found; then exit 1; fi
     log "Dependencies check passed." ""
 }
@@ -466,7 +467,7 @@ app_manager_status() {
     local less_prompt="(Scroll with arrow keys, press 'q' to return)"
     (
         declare -A running_projects
-        while read -r proj; do [[ -n "$proj" ]] && running_projects["$proj"]=1; done < <($SUDO_CMD docker compose ls --quiet)
+        while read -r proj; do [[ -n "$proj" ]] && running_projects["$proj"]=1; done < <($SUDO_CMD docker compose ls --filter status=running --quiet)
         echo -e "================ App Status Overview ================\n"
         echo -e "${C_YELLOW}--- Essential Apps (${APPS_BASE_PATH}) ---${C_RESET}"
         local -a essential_apps; discover_apps "$APPS_BASE_PATH" essential_apps
@@ -565,13 +566,12 @@ app_manager_update_all_known_apps() {
     check_root
     log "Starting update for RUNNING applications..."
 
-    # --- Using a more compatible method to find running projects ---
+    # --- Using a robust method to find running projects ---
     log "Discovering currently running Docker Compose projects..."
     declare -A running_projects
-    # Get all projects, find the ones with "running" status, and extract their names (the first column).
     while read -r proj; do
         [[ -n "$proj" ]] && running_projects["$proj"]=1
-    done < <($SUDO_CMD docker compose ls | grep 'running' | awk '{print $1}')
+    done < <($SUDO_CMD docker compose ls --filter status=running --format '{{.Name}}')
 
     local -a essential_apps; discover_apps "$APPS_BASE_PATH" essential_apps
     local -a managed_apps; discover_apps "$APPS_BASE_PATH/$MANAGED_SUBDIR" managed_apps
@@ -760,54 +760,48 @@ volume_smart_backup_main() {
     local selected_volumes=(); for i in "${!filtered_volumes[@]}"; do if ${selected_status[$i]}; then selected_volumes+=("${filtered_volumes[$i]}"); fi; done
     if [[ ${#selected_volumes[@]} -eq 0 ]]; then echo -e "\n${C_RED}No volumes selected! Exiting.${C_RESET}"; return; fi
 
-    # --- Phase 1: Group selected volumes by the app that owns them ---
+    # --- Phase 1: Group selected volumes by the app that owns them (Optimized Method) ---
     echo -e "\n${C_YELLOW}Analyzing volumes and grouping them by application...${C_RESET}"
     declare -A app_volumes_map
     declare -A app_dir_map
-    local -a standalone_volumes=()
-    local processed_volumes_str=" "
+    declare -A selected_volumes_map # Use a map for O(1) lookups
+    for vol in "${selected_volumes[@]}"; do selected_volumes_map["$vol"]=1; done
 
-    for volume in "${selected_volumes[@]}"; do
-        local container_id; container_id=$($SUDO_CMD docker ps -q --filter "volume=${volume}" | head -n 1)
-        if [[ -z "$container_id" ]]; then
-            standalone_volumes+=("$volume")
-            continue
-        fi
-
-        local project_name; project_name=$($SUDO_CMD docker inspect "$container_id" --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null)
-        if [[ -n "$project_name" ]]; then
-            # This is where we successfully found a project.
-            echo -e " -> Identified app '${C_BLUE}${project_name}${C_RESET}'. Grouping its associated volumes."
-            local project_dir; project_dir=$(_find_project_dir_by_name "$project_name")
-            if [[ -n "$project_dir" && ! -v "app_dir_map[$project_name]" ]]; then
-                app_dir_map["$project_name"]="$project_dir"
-                echo " -> Found application: ${C_BLUE}${project_name}${C_RESET}"
-            fi
-
-            mapfile -t all_vols_for_project < <($SUDO_CMD docker compose -p "$project_name" ps -q | xargs -r $SUDO_CMD docker inspect --format '{{range .Mounts}}{{.Name}} {{end}}' | tr ' ' '\n' | sort -u)
-            
-            for proj_vol in "${all_vols_for_project[@]}"; do
-                if [[ " ${selected_volumes[*]} " =~ " ${proj_vol} " && ! " ${processed_volumes_str} " =~ " ${proj_vol} " ]]; then
-                    app_volumes_map["$project_name"]+="${proj_vol} "
-                    processed_volumes_str+="${proj_vol} "
+    # 1. Get all running containers and build a map of which project each volume belongs to.
+    #    This is much faster as it's a single Docker command.
+    declare -A volume_to_project_map
+    local running_containers
+    running_containers=$($SUDO_CMD docker ps -q)
+    if [[ -n "$running_containers" ]]; then
+        # Format: project_name<TAB>volume_name
+        while IFS=$'\t' read -r project_name volume_name; do
+            if [[ -n "$project_name" && -n "$volume_name" ]]; then
+                # Only map volumes that were actually selected by the user for backup
+                if [[ -v selected_volumes_map["$volume_name"] ]]; then
+                    volume_to_project_map["$volume_name"]="$project_name"
                 fi
-            done
+            fi
+        done < <($SUDO_CMD docker inspect --format '{{$proj := index .Config.Labels "com.docker.compose.project"}}{{range .Mounts}}{{if eq .Type "volume"}}{{$proj}}\t{{.Name}}\n{{end}}{{end}}' $running_containers)
+    fi
+
+    # 2. Iterate through the selected volumes and group them using our pre-built map.
+    for volume in "${selected_volumes[@]}"; do
+        if [[ -v volume_to_project_map["$volume"] ]]; then
+            local project_name=${volume_to_project_map["$volume"]}
+            # Group the volume under its project
+            app_volumes_map["$project_name"]+="${volume} "
+            
+            # Find the project directory only once per project
+            if [[ ! -v "app_dir_map[$project_name]" ]]; then
+                echo " -> Found application: ${C_BLUE}${project_name}${C_RESET}"
+                app_dir_map["$project_name"]=$(_find_project_dir_by_name "$project_name")
+            fi
         else
-            # This is where the volume is considered standalone.
-            standalone_volumes+=("$volume")
+            # This volume is not associated with a running compose project, so it's standalone.
             echo -e " -> Volume '${C_BLUE}${volume}${C_RESET}' is standalone (app may be stopped or it's not a compose volume)."
+            standalone_volumes+=("$volume")
         fi
     done
-    
-    # Finalize standalone volumes list
-    local final_standalone=()
-    for vol in "${standalone_volumes[@]}"; do
-        if [[ ! " ${processed_volumes_str} " =~ " ${vol} " ]]; then
-             final_standalone+=("$vol")
-             processed_volumes_str+="${vol} "
-        fi
-    done
-    standalone_volumes=("${final_standalone[@]}")
 
     local backup_dir="${BACKUP_LOCATION%/}/$(date +'%Y-%m-%d_%H-%M-%S')"; mkdir -p "$backup_dir"
 
@@ -916,12 +910,22 @@ volume_smart_backup_main() {
         if [[ "$(echo "${confirm_split:-y}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|yes)$ ]]; then rar_split_opt="-v8g"; fi
     fi
     echo -e "\n${C_YELLOW}Creating secure RAR archive: ${C_GREEN}${archive_path}${C_RESET}"; echo -e "${C_GRAY}(This may take some time...)${C_RESET}"
-    local rar_pass_opt=""
+    
+    local rar_success=false
     if [[ -n "$archive_password" ]]; then
-        rar_pass_opt="-hp${archive_password}"
+        # Pipe password via stdin using -p- for security. Avoids exposing it in the process list.
+        if echo -n "$archive_password" | execute_and_log rar a -ep1 ${rar_split_opt} "-m${RAR_COMPRESSION_LEVEL:-3}" -p- -- "${archive_path}" "${backup_dir}"; then
+            rar_success=true
+        fi
+    else
+        # No password provided.
+        if execute_and_log rar a -ep1 ${rar_split_opt} "-m${RAR_COMPRESSION_LEVEL:-3}" -- "${archive_path}" "${backup_dir}"; then
+            rar_success=true
+        fi
     fi
 
-    if execute_and_log rar a -ep1 ${rar_split_opt} "-m${RAR_COMPRESSION_LEVEL:-3}" ${rar_pass_opt} -- "${archive_path}" "${backup_dir}"; then        echo -e "${C_GREEN}${TICKMARK} Secure archive created successfully.${C_RESET}";
+    if $rar_success; then
+        echo -e "${C_GREEN}${TICKMARK} Secure archive created successfully.${C_RESET}"
         # --- chown globbing for split archives ---
         $SUDO_CMD chown "${CURRENT_USER}:${CURRENT_USER}" "${archive_path%.rar}"*.rar
         local should_delete_source=${RAR_DELETE_SOURCE_AFTER:-false}; local prompt_text="Delete the original backup folder ('${backup_dir}')?"; local prompt_opts=$([[ "$should_delete_source" == "true" ]] && echo "Y/n" || echo "y/N"); read -p "${prompt_text} [${prompt_opts}]: " confirm_del
@@ -1356,7 +1360,7 @@ update_ignored_items() {
     
     check_root
     
-    # 1. Combine the live list from Docker with the already configured ignored list.
+    # Combining the live list from Docker with the already configured ignored list.
     #    This ensures custom entries are preserved and displayed.
     local -a combined_list=("${source_items_ref[@]}" "${ignored_items_ref[@]}")
     mapfile -t all_available_items < <(printf "%s\n" "${combined_list[@]}" | sort -u)
@@ -1387,15 +1391,21 @@ update_ignored_items() {
         if ${selected_status[$i]}; then new_ignored_list+=("${all_available_items[$i]}"); fi
     done
     
-    # 2. Improve the sed command to also remove the comment line associated with the block.
-    #    This prevents duplicate comments and keeps the config file cleaner.
     local config_key="IGNORED_${item_type^^}"
-    # This regex looks for the comment line and deletes from there to the closing parenthesis.
-    sed -i "/# List of ${item_type,,} to ignore/,/)/d" "$CONFIG_FILE"
+    local temp_file; temp_file=$(mktemp)
 
+    # Using awk to safely remove the entire IGNORED_* block, which is more robust than sed.
+    # It finds the start of the block (e.g., "IGNORED_VOLUMES=(") and ignores lines until
+    # it finds the closing parenthesis, without relying on fragile comments.
+    awk -v key="$config_key" '
+        $0 ~ "^" key "=\\(" { in_block = 1 }
+        !in_block { print }
+        in_block && /^\\)/ { in_block = 0 }
+    ' "$CONFIG_FILE" > "$temp_file"
+    mv "$temp_file" "$CONFIG_FILE"
+
+    # Now, append the newly generated block safely to the end of the file.
     {
-        # Re-add the block to the end of the file. While this still "moves" the block,
-        # it now correctly cleans up the old location, solving the main issue.
         echo "# List of ${item_type,,} to ignore during operations."
         echo -n "${config_key}=("
         if [ ${#new_ignored_list[@]} -gt 0 ]; then
