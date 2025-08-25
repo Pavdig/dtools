@@ -1,6 +1,6 @@
 #!/bin/bash
 # ======================================================================================
-# Docker Tool Suite v1.3.7
+# Docker Tool Suite v1.3.7.2
 # ======================================================================================
 
 # --- Strict Mode & Globals ---
@@ -59,16 +59,17 @@ encrypt_pass() {
     local plaintext="$1"
     local key
     key=$(get_secret_key)
-    # Encrypt with AES-256 and base64 encode for safe storage in the config file.
-    echo -n "$plaintext" | openssl enc -aes-256-cbc -a -salt -pbkdf2 -pass pass:"$key"
+    # Encrypt with AES-256 and base64 encode for safe storage. Use printf for reliability.
+    printf '%s' "$plaintext" | openssl enc -aes-256-cbc -a -salt -pbkdf2 -pass pass:"$key"
 }
 
 decrypt_pass() {
     local encrypted_text="$1"
     local key
     key=$(get_secret_key)
-    # Decrypt the base64 encoded string. Suppress errors for clean output.
-    echo -n "$encrypted_text" | openssl enc -aes-256-cbc -a -d -salt -pbkdf2 -pass pass:"$key" 2>/dev/null
+    # Decrypt the base64 encoded string. A newline is required for openssl to correctly process the piped base64 string.
+    # The '|| true' prevents the script from exiting on decryption failure (e.g., empty input or wrong key).
+    printf '%s\n' "$encrypted_text" | openssl enc -aes-256-cbc -a -d -salt -pbkdf2 -pass pass:"$key" 2>/dev/null || true
 }
 
 
@@ -95,8 +96,31 @@ execute_and_log() {
         printf "${C_GRAY}[DRY RUN] Would execute: %q${C_RESET}\n" "$@"
         return 0 # Assume success in dry run mode
     fi
-    "$@" 2>&1 | tee -a "${LOG_FILE:-/dev/null}"
-    return "${PIPESTATUS[0]}"
+
+    # This implementation avoids `trap` to prevent "unbound variable" errors.
+    # It uses a temporary file and `tail -f` for real-time console output.
+    # NOTE: This function should NOT be used for commands that need piped stdin, like `rar -p-`.
+    local tmp_log; tmp_log=$(mktemp)
+    local tail_pid
+
+    # Start `tail -f` in the background to stream the log to the console.
+    # We redirect its stderr to /dev/null to hide "Terminated" messages later.
+    tail -f "$tmp_log" &> /dev/null &
+    tail_pid=$!
+
+    # Execute the command, redirecting all its output to the temporary file.
+    "$@" &> "$tmp_log"
+    local exit_code=$?
+
+    # Give tail a moment to process the last lines of the file before killing it.
+    sleep 0.1
+    kill "$tail_pid" 2>/dev/null || true # Kill the tail process, ignore errors if it's already gone.
+
+    # Append the full output to the main log file and clean up.
+    cat "$tmp_log" >> "${LOG_FILE:-/dev/null}"
+    rm -f "$tmp_log"
+
+    return "$exit_code"
 }
 
 
@@ -123,6 +147,7 @@ discover_apps() {
     local path="$1"; local -n app_array="$2"
     app_array=()
     if [ ! -d "$path" ]; then echo "Warning: Directory not found for discovery: $path" >> "${LOG_FILE:-/dev/null}"; return; fi
+    shopt -s nullglob # Prevent errors if no directories match
     
     # Note the trailing slash to match only directories
     for dir in "$path"/*/; do
@@ -134,6 +159,7 @@ discover_apps() {
         fi
     done
     
+    shopt -u nullglob # Reset globbing behavior
     IFS=$'\n' app_array=($(sort <<<"${app_array[*]}")); unset IFS
 }
 
@@ -467,7 +493,7 @@ app_manager_status() {
     local less_prompt="(Scroll with arrow keys, press 'q' to return)"
     (
         declare -A running_projects
-        while read -r proj; do [[ -n "$proj" ]] && running_projects["$proj"]=1; done < <($SUDO_CMD docker compose ls --filter status=running --quiet)
+        while read -r proj; do [[ -n "$proj" ]] && running_projects["$proj"]=1; done < <($SUDO_CMD docker compose ls --quiet)
         echo -e "================ App Status Overview ================\n"
         echo -e "${C_YELLOW}--- Essential Apps (${APPS_BASE_PATH}) ---${C_RESET}"
         local -a essential_apps; discover_apps "$APPS_BASE_PATH" essential_apps
@@ -765,6 +791,7 @@ volume_smart_backup_main() {
     declare -A app_volumes_map
     declare -A app_dir_map
     declare -A selected_volumes_map # Use a map for O(1) lookups
+    local -a standalone_volumes=() # Initialize array for non-compose volumes
     for vol in "${selected_volumes[@]}"; do selected_volumes_map["$vol"]=1; done
 
     # 1. Get all running containers and build a map of which project each volume belongs to.
@@ -831,7 +858,7 @@ volume_smart_backup_main() {
     fi
 
     # --- Phase 3: Process standalone volumes ---
-    if [ ${#standalone_volumes[@]} -gt 0 ]; then
+    if [[ ${#standalone_volumes[@]} -gt 0 ]]; then
         echo -e "\n${C_GREEN}--- Processing Standalone Volume Backups ---${C_RESET}"
         for volume in "${standalone_volumes[@]}"; do
             echo -e "${C_YELLOW}Backing up standalone volume: ${C_BLUE}${volume}${C_RESET}..."
@@ -844,11 +871,11 @@ volume_smart_backup_main() {
     echo -e "\n${C_GREEN}${TICKMARK} All backup tasks completed successfully!${C_RESET}"
 
     # --- Phase 4: Create Secure RAR Archive ---
-    read -p $'\n'"Do you want to create a single, password-protected RAR archive from this backup? (Y/n): " create_rar
-    if [[ ! "$(echo "${create_rar:-y}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|yes)$ ]]; then
+    read -p $'\n'"Create a single, password-protected RAR archive from this backup? (Y/n): " create_rar
+    if [[ ! "${create_rar:-y}" =~ ^[Yy]$ ]]; then
         echo -e "${C_YELLOW}Skipping RAR archive creation.${C_RESET}"; return
     fi
-    if ! command -v rar &>/dev/null; then echo -e "\n${C_BOLD_RED}Error: 'rar' command not found...${C_RESET}"; return 1; fi
+    if ! command -v rar &>/dev/null; then echo -e "\n${C_BOLD_RED}Error: 'rar' command not found. Cannot create archive.${C_RESET}"; return 1; fi
     
     local archive_password=""
     local password_is_set=false
@@ -907,29 +934,52 @@ volume_smart_backup_main() {
     local rar_split_opt=""; local total_size; total_size=$(du -sb "$backup_dir" | awk '{print $1}'); local eight_gb=$((8 * 1024 * 1024 * 1024))
     if (( total_size > eight_gb )); then
         read -p "Backup size is over 8GB. Split archive into 8GB parts? (Y/n): " confirm_split
-        if [[ "$(echo "${confirm_split:-y}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|yes)$ ]]; then rar_split_opt="-v8g"; fi
+        if [[ "${confirm_split:-y}" =~ ^[Yy]$ ]]; then rar_split_opt="-v8g"; fi
     fi
     echo -e "\n${C_YELLOW}Creating secure RAR archive: ${C_GREEN}${archive_path}${C_RESET}"; echo -e "${C_GRAY}(This may take some time...)${C_RESET}"
     
+    # --- Direct RAR execution to ensure password piping works reliably ---
+    # We bypass execute_and_log here because its I/O redirection can interfere with rar's -p- switch.
+    local rar_log; rar_log=$(mktemp)
     local rar_success=false
+
+    # Build the command array incrementally to avoid any ambiguity with word splitting,
+    # which can be a source of bugs in some shell environments.
+    local rar_cmd=(rar a -ep1)
+    if [[ -n "$rar_split_opt" ]]; then
+        rar_cmd+=("$rar_split_opt")
+    fi
+    rar_cmd+=("-m${RAR_COMPRESSION_LEVEL:-3}")
+
     if [[ -n "$archive_password" ]]; then
-        # Pipe password via stdin using -p- for security. Avoids exposing it in the process list.
-        if echo -n "$archive_password" | execute_and_log rar a -ep1 ${rar_split_opt} "-m${RAR_COMPRESSION_LEVEL:-3}" -p- -- "${archive_path}" "${backup_dir}"; then
+        # With password: add the -p- switch (read password from stdin) and pipe the password.
+        rar_cmd+=("-p")
+        rar_cmd+=(-- "${archive_path}" "${backup_dir}")
+        if printf '%s' "$archive_password" | "${rar_cmd[@]}" &> "$rar_log"; then
             rar_success=true
         fi
     else
-        # No password provided.
-        if execute_and_log rar a -ep1 ${rar_split_opt} "-m${RAR_COMPRESSION_LEVEL:-3}" -- "${archive_path}" "${backup_dir}"; then
+        # No password: just add file arguments and execute.
+        rar_cmd+=(-- "${archive_path}" "${backup_dir}")
+        if "${rar_cmd[@]}" &> "$rar_log"; then
             rar_success=true
         fi
     fi
 
+    # Display the output from the rar command and log it.
+    cat "$rar_log"
+    cat "$rar_log" >> "${LOG_FILE:-/dev/null}"
+    rm "$rar_log"
+
     if $rar_success; then
         echo -e "${C_GREEN}${TICKMARK} Secure archive created successfully.${C_RESET}"
-        # --- chown globbing for split archives ---
         $SUDO_CMD chown "${CURRENT_USER}:${CURRENT_USER}" "${archive_path%.rar}"*.rar
-        local should_delete_source=${RAR_DELETE_SOURCE_AFTER:-false}; local prompt_text="Delete the original backup folder ('${backup_dir}')?"; local prompt_opts=$([[ "$should_delete_source" == "true" ]] && echo "Y/n" || echo "y/N"); read -p "${prompt_text} [${prompt_opts}]: " confirm_del
-        local final_decision=false; if [[ "${confirm_del,,}" == "y" ]] || [[ "${confirm_del,,}" == "yes" ]]; then final_decision=true; elif [[ -z "$confirm_del" && "$should_delete_source" == "true" ]]; then final_decision=true; fi
+
+        # Simplified logic for deleting the source folder
+        local should_delete_source=${RAR_DELETE_SOURCE_AFTER:-false}
+        local prompt_opts=$([[ "$should_delete_source" == "true" ]] && echo "Y/n" || echo "y/N")
+        read -p "Delete the original backup folder ('$(basename "$backup_dir")')? [${prompt_opts}]: " confirm_del
+        local final_decision=false; if [[ "${confirm_del,,}" == "y" ]] || [[ -z "$confirm_del" && "$should_delete_source" == "true" ]]; then final_decision=true; fi
         if $final_decision; then echo -e "${C_YELLOW}Deleting source folder...${C_RESET}"; rm -rf "${backup_dir}"; echo -e "${C_GREEN}Source folder deleted.${C_RESET}"; else echo -e "${C_YELLOW}Original backup folder kept.${C_RESET}"; fi
     else
         echo -e "${C_BOLD_RED}Error: Failed to create RAR archive. Check logs for details.${C_RESET}"
@@ -1149,17 +1199,19 @@ update_secure_archive_settings() {
     done
 
     echo -e "\n${C_YELLOW}Updating configuration file...${C_RESET}"
-    local new_config_line="ENCRYPTED_RAR_PASSWORD=${ENCRYPTED_RAR_PASSWORD}"
+    # Use printf to create a safely quoted line for both replacement and appending.
+    local new_config_line
+    new_config_line=$(printf "ENCRYPTED_RAR_PASSWORD=%q" "${ENCRYPTED_RAR_PASSWORD}")
 
-    # Use sed to replace the line in-place if it exists, otherwise append it.
-    if grep -q "^ENCRYPTED_RAR_PASSWORD=" "$CONFIG_FILE"; then
-        # Using a temporary variable to handle potential special characters for sed
-        local replacement; replacement=$(printf "%q" "$ENCRYPTED_RAR_PASSWORD")
-        sed -i "/^ENCRYPTED_RAR_PASSWORD=/c\ENCRYPTED_RAR_PASSWORD=${replacement}" "$CONFIG_FILE"
-    else
-        echo -e "\n# RAR Password is encrypted using a machine-specific key." >> "$CONFIG_FILE"
-        echo "$new_config_line" >> "$CONFIG_FILE"
-    fi
+    # Use a more robust sed 's' command to replace the line if it exists, otherwise append it.
+    # --- Robustly update the config file ---
+    # 1. Delete any existing ENCRYPTED_RAR_PASSWORD lines to prevent duplicates and clean up.
+    sed -i '/^ENCRYPTED_RAR_PASSWORD=/d' "$CONFIG_FILE"
+
+    # 2. Insert the new line in the correct section for organization.
+    #    This finds the anchor comment and adds the password line after it.
+    local anchor="# RAR Password is encrypted using a machine-specific key."
+    sed -i "\|$anchor|a ${new_config_line}" "$CONFIG_FILE"
     
     # Reload the config into the current script session
     source "$CONFIG_FILE"
