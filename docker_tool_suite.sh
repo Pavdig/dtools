@@ -1,6 +1,6 @@
 #!/bin/bash
 # ======================================================================================
-# Docker Tool Suite v1.3.7.2
+# Docker Tool Suite v1.3.7.3
 # ======================================================================================
 
 # --- Strict Mode & Globals ---
@@ -786,45 +786,48 @@ volume_smart_backup_main() {
     local selected_volumes=(); for i in "${!filtered_volumes[@]}"; do if ${selected_status[$i]}; then selected_volumes+=("${filtered_volumes[$i]}"); fi; done
     if [[ ${#selected_volumes[@]} -eq 0 ]]; then echo -e "\n${C_RED}No volumes selected! Exiting.${C_RESET}"; return; fi
 
-    # --- Phase 1: Group selected volumes by the app that owns them (Optimized Method) ---
+    # --- Phase 1: Group selected volumes by the app that owns them ---
     echo -e "\n${C_YELLOW}Analyzing volumes and grouping them by application...${C_RESET}"
     declare -A app_volumes_map
     declare -A app_dir_map
-    declare -A selected_volumes_map # Use a map for O(1) lookups
-    local -a standalone_volumes=() # Initialize array for non-compose volumes
-    for vol in "${selected_volumes[@]}"; do selected_volumes_map["$vol"]=1; done
+    local -a standalone_volumes=()
 
-    # 1. Get all running containers and build a map of which project each volume belongs to.
-    #    This is much faster as it's a single Docker command.
-    declare -A volume_to_project_map
-    local running_containers
-    running_containers=$($SUDO_CMD docker ps -q)
-    if [[ -n "$running_containers" ]]; then
-        # Format: project_name<TAB>volume_name
-        while IFS=$'\t' read -r project_name volume_name; do
-            if [[ -n "$project_name" && -n "$volume_name" ]]; then
-                # Only map volumes that were actually selected by the user for backup
-                if [[ -v selected_volumes_map["$volume_name"] ]]; then
-                    volume_to_project_map["$volume_name"]="$project_name"
-                fi
-            fi
-        done < <($SUDO_CMD docker inspect --format '{{$proj := index .Config.Labels "com.docker.compose.project"}}{{range .Mounts}}{{if eq .Type "volume"}}{{$proj}}\t{{.Name}}\n{{end}}{{end}}' $running_containers)
-    fi
-
-    # 2. Iterate through the selected volumes and group them using our pre-built map.
     for volume in "${selected_volumes[@]}"; do
-        if [[ -v volume_to_project_map["$volume"] ]]; then
-            local project_name=${volume_to_project_map["$volume"]}
-            # Group the volume under its project
-            app_volumes_map["$project_name"]+="${volume} "
-            
-            # Find the project directory only once per project
-            if [[ ! -v "app_dir_map[$project_name]" ]]; then
-                echo " -> Found application: ${C_BLUE}${project_name}${C_RESET}"
-                app_dir_map["$project_name"]=$(_find_project_dir_by_name "$project_name")
+        local container_id
+        # Find a RUNNING container using this volume. We only need one to identify the project.
+        container_id=$($SUDO_CMD docker ps -q --filter "volume=${volume}" | head -n 1)
+
+        if [[ -n "$container_id" ]]; then
+            # Found a container, now get its compose project name from its labels.
+            local project_name
+            project_name=$($SUDO_CMD docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$container_id")
+
+            if [[ -n "$project_name" ]]; then
+                # This is a compose volume, group it with its project.
+                app_volumes_map["$project_name"]+="${volume} "
+
+                # Find and store the project's directory only once.
+                if [[ ! -v "app_dir_map[$project_name]" ]]; then
+                    echo " -> Found application for volume '${volume}': ${C_BLUE}${project_name}${C_RESET}"
+                    local found_dir
+                    found_dir=$(_find_project_dir_by_name "$project_name")
+                    if [[ -n "$found_dir" ]]; then
+                        app_dir_map["$project_name"]="$found_dir"
+                    else
+                        log "ERROR: Could not find directory for project '$project_name'. Its volumes will be backed up, but the app will not be stopped."
+                        # This is a fallback: we can't stop the app, so we treat its volumes as standalone to ensure they are still backed up.
+                        standalone_volumes+=("$volume")
+                        unset 'app_volumes_map["$project_name"]' # Remove from app map
+                        continue # Go to the next volume
+                    fi
+                fi
+            else
+                # The container using the volume is not part of a compose project.
+                echo -e " -> Volume '${C_BLUE}${volume}${C_RESET}' is used by a non-compose container. Backing up as standalone."
+                standalone_volumes+=("$volume")
             fi
         else
-            # This volume is not associated with a running compose project, so it's standalone.
+            # No running container is using this volume.
             echo -e " -> Volume '${C_BLUE}${volume}${C_RESET}' is standalone (app may be stopped or it's not a compose volume)."
             standalone_volumes+=("$volume")
         fi
