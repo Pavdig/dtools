@@ -1,6 +1,6 @@
 #!/bin/bash
 # ======================================================================================
-# Docker Tool Suite v1.3.7.3
+# Docker Tool Suite v1.3.7.4
 # ======================================================================================
 
 # --- Strict Mode & Globals ---
@@ -99,7 +99,6 @@ execute_and_log() {
 
     # This implementation avoids `trap` to prevent "unbound variable" errors.
     # It uses a temporary file and `tail -f` for real-time console output.
-    # NOTE: This function should NOT be used for commands that need piped stdin, like `rar -p-`.
     local tmp_log; tmp_log=$(mktemp)
     local tail_pid
 
@@ -942,7 +941,7 @@ volume_smart_backup_main() {
     echo -e "\n${C_YELLOW}Creating secure RAR archive: ${C_GREEN}${archive_path}${C_RESET}"; echo -e "${C_GRAY}(This may take some time...)${C_RESET}"
     
     # --- Direct RAR execution to ensure password piping works reliably ---
-    # We bypass execute_and_log here because its I/O redirection can interfere with rar's -p- switch.
+    # We bypass execute_and_log here because its I/O redirection can interfere with rar's -hp switch.
     local rar_log; rar_log=$(mktemp)
     local rar_success=false
 
@@ -954,9 +953,12 @@ volume_smart_backup_main() {
     fi
     rar_cmd+=("-m${RAR_COMPRESSION_LEVEL:-3}")
 
+    # Using Locked archive
+    rar_cmd+=("-k")
+
     if [[ -n "$archive_password" ]]; then
-        # With password: add the -p- switch (read password from stdin) and pipe the password.
-        rar_cmd+=("-p")
+        # With password: add the -hp (Encrypt both file data and headers) switch (read password from stdin) and pipe the password.
+        rar_cmd+=("-hp")
         rar_cmd+=(-- "${archive_path}" "${backup_dir}")
         if printf '%s' "$archive_password" | "${rar_cmd[@]}" &> "$rar_log"; then
             rar_success=true
