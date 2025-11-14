@@ -1,6 +1,6 @@
 #!/bin/bash
 # ======================================================================================
-# Docker Tool Suite v1.3.7.4
+# Docker Tool Suite v1.3.8
 # ======================================================================================
 
 # --- Strict Mode & Globals ---
@@ -594,9 +594,12 @@ app_manager_update_all_known_apps() {
     # --- Using a robust method to find running projects ---
     log "Discovering currently running Docker Compose projects..."
     declare -A running_projects
+    # This is the most compatible method. It avoids --filter and --format flags,
+    # which are failing on this system. It parses the default, human-readable
+    # command output to find projects with a "running" status.
     while read -r proj; do
         [[ -n "$proj" ]] && running_projects["$proj"]=1
-    done < <($SUDO_CMD docker compose ls --filter status=running --format '{{.Name}}')
+    done < <($SUDO_CMD docker compose ls | grep 'running' | awk '{print $1}')
 
     local -a essential_apps; discover_apps "$APPS_BASE_PATH" essential_apps
     local -a managed_apps; discover_apps "$APPS_BASE_PATH/$MANAGED_SUBDIR" managed_apps
