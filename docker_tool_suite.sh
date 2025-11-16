@@ -1,6 +1,6 @@
 #!/bin/bash
 # ======================================================================================
-# Docker Tool Suite v1.3.8
+# Docker Tool Suite v1.3.8.4
 # ======================================================================================
 
 # --- Strict Mode & Globals ---
@@ -360,20 +360,35 @@ setup_cron_job() {
 
     local cron_schedule=""
     while true; do
-        clear; echo -e "${C_YELLOW}Choose a schedule for the app updater (for user: ${C_GREEN}$cron_target_user${C_YELLOW}):${C_RESET}\n"
-        echo "   1) Every day (at midnight)      3) Weekly (Sunday at midnight)"
-        echo "   2) Every 3 days                 4) Custom"
-        echo "   5) Cancel"
-        read -p "Enter your choice [1-5]: " choice
+        clear
+        echo -e "${C_YELLOW}Choose a schedule for the app updater (for user: ${C_GREEN}$cron_target_user${C_YELLOW}):${C_RESET}\n"
+        echo "   --- Special & Frequent ---           --- Daily & Weekly ---"
+        echo "   1) At every reboot                   6) Daily (at 4 AM)"
+        echo "   2) Every hour                        7) Weekly (Sunday at midnight)"
+        echo "   3) Every 6 hours                     8) Weekly (Saturday at 4 AM)"
+        echo "   4) Every 12 hours"
+        echo "   5) Daily (at midnight)"
+        echo
+        echo "   --- Monthly & Custom ---"
+        echo "   9) Monthly (1st of month at 4 AM)"
+        echo "  10) Custom"
+        echo "  11) Cancel"
+        echo
+        read -p "Enter your choice [1-11]: " choice
         case $choice in
-            1) cron_schedule="0 0 * * *"; break ;;
-            2) cron_schedule="0 0 */3 * *"; break ;;
-            3) cron_schedule="0 0 * * 0"; break ;;
-            4) 
-               read -p "Enter custom cron schedule (e.g., '0 */6 * * *' for every 6 hours): " custom_cron
-               if [[ -n "$custom_cron" ]]; then cron_schedule="$custom_cron"; break; fi ;;
-            5) echo -e "${C_YELLOW}Cron job setup canceled.${C_RESET}"; return ;;
-            *) echo -e "${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
+            1) cron_schedule="@reboot"; break ;;
+            2) cron_schedule="0 * * * *"; break ;;
+            3) cron_schedule="0 */6 * * *"; break ;;
+            4) cron_schedule="0 */12 * * *"; break ;;
+            5) cron_schedule="0 0 * * *"; break ;;
+            6) cron_schedule="0 4 * * *"; break ;;
+            7) cron_schedule="0 0 * * 0"; break ;;
+            8) cron_schedule="0 4 * * 6"; break ;;
+            9) cron_schedule="0 4 1 * *"; break ;;
+            10) read -p "Enter custom cron schedule (e.g., '30 2 * * *' for 2:30 AM daily): " custom_cron
+                if [[ -n "$custom_cron" ]]; then cron_schedule="$custom_cron"; break; fi ;;
+            11) echo -e "${C_YELLOW}Cron job setup canceled.${C_RESET}"; return ;;
+            *) echo -e "${C_RED}Invalid option. Please try again.${C_RESET}"; sleep 1 ;;
         esac
     done
 
@@ -492,7 +507,11 @@ app_manager_status() {
     local less_prompt="(Scroll with arrow keys, press 'q' to return)"
     (
         declare -A running_projects
-        while read -r proj; do [[ -n "$proj" ]] && running_projects["$proj"]=1; done < <($SUDO_CMD docker compose ls --quiet)
+        # This is a more robust method to find running projects, less prone to breaking with docker updates.
+        while read -r proj; do
+            [[ -n "$proj" ]] && running_projects["$proj"]=1
+        done < <($SUDO_CMD docker compose ls | grep 'running' | awk '{print $1}')
+
         echo -e "================ App Status Overview ================\n"
         echo -e "${C_YELLOW}--- Essential Apps (${APPS_BASE_PATH}) ---${C_RESET}"
         local -a essential_apps; discover_apps "$APPS_BASE_PATH" essential_apps
@@ -511,7 +530,7 @@ app_manager_status() {
             done
         fi
         echo -e "\n===================================================="
-    ) | less -RFX --prompt="$less_prompt"
+    ) | less -RX --prompt="$less_prompt"
 }
 
 app_manager_interactive_handler() {
@@ -651,8 +670,8 @@ app_manager_menu() {
     check_root
     local options=(
         "Show App STATUS"
-        "Manage ESSENTIAL Apps"
-        "Manage MANAGED Apps"
+        "Control ESSENTIAL Apps"
+        "Control MANAGED Apps"
         "STOP ALL RUNNING APPS"
         "Return to Main Menu"
     )
@@ -676,6 +695,7 @@ app_manager_menu() {
                 echo -e "\n${C_BLUE}Task complete. Press Enter...${C_RESET}"; read -r
                 ;;
             5) return ;;
+            q) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
         esac
     done
@@ -1055,6 +1075,7 @@ volume_manager_menu() {
             2) volume_restore_main; echo -e "\nPress Enter to return..."; read -r;;
             3) volume_checker_main ;;
             4) return ;;
+            q) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
         esac
     done
@@ -1327,20 +1348,27 @@ setup_unused_images_cron_job() {
 
     local cron_schedule=""
     while true; do
-        clear; echo -e "${C_YELLOW}Choose a schedule for the unused image updater (for user: ${C_GREEN}$cron_target_user${C_YELLOW}):${C_RESET}\n"
-        echo "   1) Every day (at 03:00)      3) Weekly (Sunday at 03:00)"
-        echo "   2) Every 3 days (at 03:00)   4) Custom"
-        echo "   5) Cancel"
-        read -p "Enter your choice [1-5]: " choice
+        clear
+        echo -e "${C_YELLOW}Choose a schedule for the unused image cleaner (for user: ${C_GREEN}$cron_target_user${C_YELLOW}):${C_RESET}\n"
+        echo "   --- Daily & Weekly ---                  --- Monthly & Custom ---"
+        echo "   1) Daily (at 3 AM)                      5) Bi-weekly (1st and 15th at 3 AM)"
+        echo "   2) Every 3 days (at 3 AM)               6) Monthly (1st of month at 3 AM)"
+        echo "   3) Weekly (Sunday at 3 AM)"
+        echo "   4) Weekly (Saturday at 3 AM)            7) Custom"
+        echo "                                           8) Cancel"
+        echo
+        read -p "Enter your choice [1-8]: " choice
         case $choice in
             1) cron_schedule="0 3 * * *"; break ;;
             2) cron_schedule="0 3 */3 * *"; break ;;
             3) cron_schedule="0 3 * * 0"; break ;;
-            4) 
-               read -p "Enter custom cron schedule (e.g., '0 5 * * *' for 5 AM daily): " custom_cron
+            4) cron_schedule="0 3 * * 6"; break ;;
+            5) cron_schedule="0 3 1,15 * *"; break ;;
+            6) cron_schedule="0 3 1 * *"; break ;;
+            7) read -p "Enter custom cron schedule (e.g., '0 5 * * *' for 5 AM daily): " custom_cron
                if [[ -n "$custom_cron" ]]; then cron_schedule="$custom_cron"; break; fi ;;
-            5) echo -e "${C_YELLOW}Cron job setup canceled.${C_RESET}"; return ;;
-            *) echo -e "${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
+            8) echo -e "${C_YELLOW}Cron job setup canceled.${C_RESET}"; return ;;
+            *) echo -e "${C_RED}Invalid option. Please try again.${C_RESET}"; sleep 1 ;;
         esac
     done
 
@@ -1367,10 +1395,11 @@ setup_unused_images_cron_job() {
 
 utility_menu() {
     local options=(
-        "Log Manager"
-        "Clean Up Docker System"
-        "Update Unused Images"
         "Manage Settings"
+        "Update all running Apps"
+        "Update Unused Images"
+        "Clean Up Docker System"
+        "Log Manager"
         "Return to Main Menu"
     )
     while true; do
@@ -1380,11 +1409,13 @@ utility_menu() {
         echo "----------------------------------------------"
         read -rp "Please select an option: " choice
         case "$choice" in
-            1) log_manager_menu ;;
-            2) system_prune_main; echo -e "\nPress Enter to return..."; read -r ;;
+            1) settings_manager_menu ;;
+            2) app_manager_update_all_known_apps; echo -e "\nPress Enter to return..."; read -r ;;
             3) update_unused_images_main; echo -e "\nPress Enter to return..."; read -r ;;
-            4) settings_manager_menu ;;
-            5) return ;;
+            4) system_prune_main; echo -e "\nPress Enter to return..."; read -r ;;
+            5) log_manager_menu ;;
+            6) return ;;
+            q) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
         esac
     done
@@ -1482,10 +1513,11 @@ update_ignored_items() {
 
 settings_manager_menu() {
     local options=(
-        "Manage Path Settings"
-        "Manage Ignored Volumes"
-        "Manage Ignored Images"
-        "Manage Archive Settings"
+        "Change Path Settings"
+        "Change Ignored Volumes"
+        "Change Ignored Images"
+        "Change Archive Settings"
+        "Schedule Apps Updater"
         "Schedule Unused Image Updater"
         "Return to Utilities"
     )
@@ -1530,11 +1562,16 @@ settings_manager_menu() {
 
                 echo -e "\n${C_BLUE}Archive settings updated. Press Enter...${C_RESET}"; read -r
                 ;;
-            5) # Schedule Unused Image Updater
+            5) # Schedule Apps Updater
+                setup_cron_job
+                echo -e "\nPress Enter to return..."; read -r
+                ;;
+            6) # Schedule Unused Image Updater
                 setup_unused_images_cron_job
                 echo -e "\nPress Enter to return..."; read -r
                 ;;
-            6) return ;;
+            7) return ;;
+            q) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
         esac
     done
@@ -1559,6 +1596,7 @@ main_menu() {
             2) volume_manager_menu ;;
             3) utility_menu ;;
             4) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
+            q) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
             *) echo -e "\n${C_RED}Invalid option: '$choice'.${C_RESET}"; sleep 1 ;;
         esac
     done
