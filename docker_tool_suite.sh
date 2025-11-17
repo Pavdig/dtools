@@ -1,11 +1,12 @@
 #!/bin/bash
 # ======================================================================================
-# Docker Tool Suite v1.3.8.4
+# Docker Tool Suite v1.3.9
 # ======================================================================================
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
 DRY_RUN=false
+IS_CRON_RUN=false
 
 # ======================================================================================
 # --- SECTION 1: SHARED FUNCTIONS & CONFIGURATION ---
@@ -86,7 +87,7 @@ check_root() {
 }
 
 log() {
-    if [[ -n "${LOG_FILE-}" ]]; then echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"; fi
+    if [[ -n "${LOG_FILE-}" && "$IS_CRON_RUN" == "false" ]]; then echo "[$(date +'%Y-m-%d %H:%M:%S')] $1" >> "$LOG_FILE"; fi
     if [[ -n "${2-}" ]]; then echo -e "$2"; fi
 }
 
@@ -455,12 +456,13 @@ _update_app_task() {
         was_running=true
     fi
 
-    # --- Image pull logic to handle ignored images ---
+    # --- Step 1: Image Pull & Update Detection ---
     log "Checking for images to update for '$app_name'..."
     mapfile -t all_app_images < <($SUDO_CMD docker compose -f "$compose_file" config --images 2>/dev/null)
     
     local -a images_to_pull=()
     local all_pulls_succeeded=true
+    local update_was_found=false # Flag to track if a new image was actually downloaded
 
     if [ ${#all_app_images[@]} -eq 0 ]; then
         log "No images defined in compose file for $app_name. Nothing to pull."
@@ -476,10 +478,24 @@ _update_app_task() {
         if [ ${#images_to_pull[@]} -gt 0 ]; then
             echo -e "Pulling latest versions for non-ignored images in ${C_YELLOW}${app_name}${C_RESET}..."
             for image in "${images_to_pull[@]}"; do
-                log "Pulling image: $image" "   -> Pulling ${C_BLUE}${image}${C_RESET}..."
-                if ! execute_and_log $SUDO_CMD docker pull "$image"; then
-                    log "ERROR: Failed to pull image $image" "${C_BOLD_RED}Failed to pull ${image}. Check log for details.${C_RESET}"
+                log "Checking image: $image" "   -> Checking ${C_BLUE}${image}${C_RESET}..."
+                
+                # We need to capture the output of `docker pull` to see if an update happened.
+                local pull_output; pull_output=$($SUDO_CMD docker pull "$image" 2>&1)
+                local pull_exit_code=$?
+                
+                # Manually log the output since we aren't using execute_and_log here
+                echo "$pull_output" >> "${LOG_FILE:-/dev/null}"
+                
+                if [ "$pull_exit_code" -ne 0 ]; then
+                    log "ERROR: Failed to pull image $image" "${C_BOLD_RED}Failed to pull ${image}. See log for details.${C_RESET}"
                     all_pulls_succeeded=false
+                else
+                    # Check the output for the string that indicates a successful new download.
+                    if echo "$pull_output" | grep -q "Downloaded newer image"; then
+                        log "New image found for $image." "   -> ${C_GREEN}Newer image downloaded!${C_RESET}"
+                        update_was_found=true
+                    fi
                 fi
             done
         else
@@ -487,17 +503,26 @@ _update_app_task() {
         fi
     fi
 
+    # --- Step 2: Restart Application ONLY if updates were found ---
     if $all_pulls_succeeded; then
-        log "Image update check successful for $app_name."
         if $was_running; then
-            log "Restarting running application '$app_name' to apply any updates..."
-            execute_and_log $SUDO_CMD docker compose -f "$compose_file" up -d --remove-orphans
-            log "Successfully updated and restarted '$app_name'."
+            if $update_was_found; then
+                echo -e "${C_GREEN}New image(s) found. Restarting '$app_name' to apply updates...${C_RESET}"
+                log "Stopping '$app_name' to apply updates..."
+                _stop_app_task "$app_name" "$app_dir"
+                
+                log "Starting '$app_name' with new images..."
+                _start_app_task "$app_name" "$app_dir"
+                log "Successfully updated and restarted '$app_name'."
+            else
+                log "All images for '$app_name' are already up to date. No restart needed."
+                echo -e "All images for ${C_YELLOW}${app_name}${C_RESET} are up to date. No action taken."
+            fi
         else
-            log "Application '$app_name' was not running. Images updated, but app remains stopped."
+            log "Application '$app_name' was not running. Images checked, but app remains stopped."
         fi
     else
-        log "ERROR: Failed to pull one or more images for '$app_name'. Aborting update to prevent issues."
+        log "ERROR: Failed to pull one or more images for '$app_name'. Aborting restart to prevent issues."
         echo -e "${C_BOLD_RED}Update for '$app_name' aborted due to pull failures. The application was not restarted.${C_RESET}"
     fi
 }
@@ -1610,27 +1635,27 @@ if [[ $# -gt 0 ]]; then
     prune_old_logs
     case "$1" in
         update)
-            shift; [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=true
-            [[ "${1:-}" == "--cron" ]] && echo "--- Running in automated cron mode ---" >> "$LOG_FILE"
+            shift
+            if [[ "${1:-}" == "--cron" ]]; then
+                IS_CRON_RUN=true
+                # Check for a potential --dry-run flag after --cron, e.g., "update --cron --dry-run"
+                [[ "${2:-}" == "--dry-run" ]] && DRY_RUN=true
+            else
+                [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=true
+            fi
             app_manager_update_all_known_apps
             exit 0 ;;
         update-unused)
             shift # Move past 'update-unused'
-            is_cron=false
             # Loop through remaining arguments
             while (( "$#" )); do
               case "$1" in
                 --dry-run) DRY_RUN=true; shift ;;
-                --cron) is_cron=true; shift ;;
+                --cron) IS_CRON_RUN=true; shift ;;
                 *) echo "Unknown option for update-unused: $1"; exit 1 ;;
               esac
             done
-            if $is_cron; then
-              echo "--- Running unused image update in automated cron mode ---" >> "$LOG_FILE"
-              update_unused_images_main "cron"
-            else
-              update_unused_images_main
-            fi
+            update_unused_images_main
             exit 0 ;;
         *) echo "Unknown command: $1"; echo "Usage: $0 [update|update-unused|--help]"; exit 1 ;;
     esac
