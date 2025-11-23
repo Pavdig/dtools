@@ -1,6 +1,6 @@
 #!/bin/bash
 # ======================================================================================
-# Docker Tool Suite v1.4.1
+# Docker Tool Suite v1.4.2
 # ======================================================================================
 
 # --- Strict Mode & Globals ---
@@ -73,6 +73,36 @@ decrypt_pass() {
     printf '%s\n' "$encrypted_text" | openssl enc -aes-256-cbc -a -d -salt -pbkdf2 -pass pass:"$key" 2>/dev/null || true
 }
 
+_record_image_state() {
+    local app_dir="$1"
+    local image_name="$2"
+    local image_id="$3"
+    local history_file="${app_dir}/.update_history"
+
+    if [[ "$image_id" == "not_found" || -z "$image_id" ]]; then return; fi
+
+    # Format: Timestamp | Image Name | Image ID
+    local entry="$(date +'%Y-%m-%d %H:%M:%S')|${image_name}|${image_id}"
+    
+    # Check if the last entry is identical to avoid duplicates (e.g., repeated runs with no updates)
+    local last_entry
+    if [[ -f "$history_file" ]]; then
+        last_entry=$(tail -n 1 "$history_file")
+        # Extract just the image and ID part to compare
+        if [[ "${last_entry#*|}" == "${image_name}|${image_id}" ]]; then
+            return # Skip duplicate
+        fi
+    fi
+
+    echo "$entry" >> "$history_file"
+    
+    # Keep file size manageable (keep last 50 entries)
+    if [ $(wc -l < "$history_file") -gt 50 ]; then
+        local temp_hist; temp_hist=$(mktemp)
+        tail -n 50 "$history_file" > "$temp_hist"
+        mv "$temp_hist" "$history_file"
+    fi
+}
 
 # --- check_root now authenticates on demand ---
 check_root() {
@@ -448,7 +478,7 @@ _stop_app_task() {
 
 _update_app_task() {
     local app_name="$1" app_dir="$2"
-    local force_mode="${3:-false}" # New argument: 'true' or 'false'
+    local force_mode="${3:-false}"
 
     log "Updating $app_name (Force Mode: $force_mode)..."
     local compose_file; compose_file=$(find_compose_file "$app_dir")
@@ -467,10 +497,9 @@ _update_app_task() {
     local all_pulls_succeeded=true
     local update_was_found=false 
 
-    # If force mode is on, we treat it as if an update was found immediately
     if [[ "$force_mode" == "true" ]]; then
         update_was_found=true
-        log "Force mode enabled: Containers will be recreated regardless of image status."
+        log "Force mode enabled: Containers will be recreated."
     fi
 
     if [ ${#all_app_images[@]} -eq 0 ]; then
@@ -493,10 +522,14 @@ _update_app_task() {
                 local id_before
                 id_before=$($SUDO_CMD docker inspect --format='{{.Id}}' "$image" 2>/dev/null || echo "not_found")
 
+                # --- NEW: Record History ---
+                _record_image_state "$app_dir" "$image" "$id_before"
+                # ---------------------------
+
                 # 2. Perform the pull
                 local pull_output; pull_output=$($SUDO_CMD docker pull "$image" 2>&1)
                 local pull_exit_code=$?
-                echo "$pull_output" >> "${LOG_FILE:-/dev/null}" # Log raw output
+                echo "$pull_output" >> "${LOG_FILE:-/dev/null}"
                 
                 if [ "$pull_exit_code" -ne 0 ]; then
                     log "ERROR: Failed to pull image $image" "${C_BOLD_RED}Failed to pull ${image}. See log for details.${C_RESET}"
@@ -534,12 +567,7 @@ _update_app_task() {
                 fi
 
                 log "$restart_msg '$app_name'..."
-                
-                # Stop first for a clean state
                 _stop_app_task "$app_name" "$app_dir"
-                
-                log "Starting '$app_name'..."
-                # Pass the force flag to start task
                 _start_app_task "$app_name" "$app_dir" "$start_args"
                 
                 log "Successfully updated/recreated '$app_name'."
@@ -554,6 +582,97 @@ _update_app_task() {
         log "ERROR: Failed to pull images for '$app_name'. Aborting."
         echo -e "${C_BOLD_RED}Update for '$app_name' aborted due to pull failures.${C_RESET}"
     fi
+}
+
+_rollback_app_task() {
+    local app_name="$1" app_dir="$2"
+    local history_file="${app_dir}/.update_history"
+    
+    clear
+    echo -e "${C_YELLOW}--- Rollback Wizard for ${app_name} ---${C_RESET}"
+    
+    if [[ ! -f "$history_file" ]]; then
+        echo -e "${C_RED}No update history found for this app.${C_RESET}"
+        echo "History is only created when you run updates via this tool."
+        read -p "Press Enter to return..."
+        return
+    fi
+
+    # Read history into array (reversed to show newest first)
+    # Uses sed '1!G;h;$!d' as a portable replacement for 'tac'
+    mapfile -t history_lines < <(sed '1!G;h;$!d' "$history_file")
+    
+    if [ ${#history_lines[@]} -eq 0 ]; then
+        echo -e "${C_YELLOW}History file is empty.${C_RESET}"; read -p "Press Enter..." ; return
+    fi
+
+    echo "Select a previous state to restore:"
+    echo "----------------------------------------------------------------"
+    printf "%-4s | %-20s | %-30s | %s\n" "No." "Date" "Image Name" "ID (Hash)"
+    echo "----------------------------------------------------------------"
+
+    local -a valid_choices=()
+    local display_count=0
+    
+    for line in "${history_lines[@]}"; do
+        IFS='|' read -r timestamp img_name img_id <<< "$line"
+        
+        # Check if this ID still exists locally
+        if $SUDO_CMD docker image inspect "$img_id" &>/dev/null; then
+            local short_id="${img_id:7:12}" # Remove sha256: and truncate
+            printf "%-4s | %-20s | %-30s | %s\n" "$((display_count+1))" "$timestamp" "${img_name:0:28}.." "$short_id"
+            valid_choices+=("$line")
+            ((display_count++))
+        else
+            # Optional: indicate pruned images? For now, just skip them to keep the list clean.
+            continue
+        fi
+        
+        # Limit to last 10 valid options
+        if [ $display_count -ge 10 ]; then break; fi
+    done
+    echo "----------------------------------------------------------------"
+
+    if [ ${#valid_choices[@]} -eq 0 ]; then
+        echo -e "${C_RED}No locally available images found in history.${C_RESET}"
+        echo "The previous versions may have been pruned by a cleanup task."
+        read -p "Press Enter..."
+        return
+    fi
+
+    read -p "Enter number to rollback to (or 'q' to cancel): " choice
+    if [[ "${choice,,}" == "q" ]]; then return; fi
+
+    if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#valid_choices[@]}" ]; then
+        local selected_line="${valid_choices[$((choice-1))]}"
+        IFS='|' read -r r_time r_name r_id <<< "$selected_line"
+
+        echo -e "\n${C_BOLD_RED}WARNING: This will force '${r_name}' to point to ID '${r_id:7:12}' locally.${C_RESET}"
+        read -p "Are you sure? (y/N): " confirm
+        if [[ "${confirm,,}" =~ ^(y|yes)$ ]]; then
+            log "Rolling back $app_name image $r_name to $r_id..."
+            
+            # 1. Retag the old ID to the current name
+            if execute_and_log $SUDO_CMD docker tag "$r_id" "$r_name"; then
+                echo -e "${C_GREEN}Image successfully retagged.${C_RESET}"
+                
+                # 2. Restart the app
+                echo "Restarting application to apply change..."
+                _stop_app_task "$app_name" "$app_dir"
+                _start_app_task "$app_name" "$app_dir" "--force-recreate"
+                
+                echo -e "\n${C_GREEN}${TICKMARK} Rollback complete.${C_RESET}"
+                log "Rollback successful for $r_name."
+            else
+                echo -e "${C_RED}Error: Failed to retag image.${C_RESET}"
+            fi
+        else
+            echo "Rollback canceled."
+        fi
+    else
+        echo -e "${C_RED}Invalid selection.${C_RESET}"
+    fi
+    read -p "Press Enter to continue..."
 }
 
 app_manager_status() {
@@ -598,7 +717,8 @@ app_manager_interactive_handler() {
         echo -e " ${C_YELLOW}1)${C_RESET} Start ${app_type_name} Apps"
         echo -e " ${C_YELLOW}2)${C_RESET} Stop ${app_type_name} Apps"
         echo -e " ${C_YELLOW}3)${C_RESET} Update ${app_type_name} Apps"
-        echo -e " ${C_YELLOW}4)${C_RESET} Return to App Manager Menu"
+        echo -e " ${C_YELLOW}4)${C_RESET} Rollback ${app_type_name} Apps"
+        echo -e " ${C_YELLOW}5)${C_RESET} Return to App Manager Menu"
         echo "----------------------------------------------"
         read -rp "Please select an option: " choice
 
@@ -615,7 +735,6 @@ app_manager_interactive_handler() {
                 action="stop"; title="Select ${app_type_name} Apps to STOP"; task_func="_stop_app_task"; menu_action_key="stop" ;;
             3)
                 action="update"; title="Select ${app_type_name} Apps to UPDATE"; task_func="_update_app_task"; menu_action_key="update"
-                # Ask for force recreation preference
                 echo ""
                 read -p "Force recreate containers even if no updates found? (useful for config changes) [y/N]: " force_choice
                 if [[ "${force_choice,,}" =~ ^(y|yes)$ ]]; then
@@ -623,7 +742,10 @@ app_manager_interactive_handler() {
                     title="${title} (FORCE RECREATE)"
                 fi
                 ;;
-            4) return ;;
+            4)
+                action="rollback"; title="Select ONE App to Rollback"; task_func="_rollback_app_task"; menu_action_key="rollback"
+                ;;
+            5) return ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1; continue ;;
         esac
 
@@ -645,16 +767,14 @@ app_manager_interactive_handler() {
         
         local -a selected_status=()
         if [[ "$action" == "stop" || "$action" == "update" ]]; then
-            # Default to checking running apps, but strip (defaults to running) from title if we already added (FORCE RECREATE)
             [[ "$force_flag" == "false" ]] && title+=" (defaults to running)"
-            
             declare -A running_apps_map
             while read -r project; do [[ -n "$project" ]] && running_apps_map["$project"]=1; done < <($SUDO_CMD docker compose ls --quiet)
             for app in "${all_apps[@]}"; do
                 if [[ -v running_apps_map[$app] ]]; then selected_status+=("true"); else selected_status+=("false"); fi
             done
         else
-            for ((i=0; i<${#all_apps[@]}; i++)); do selected_status+=("true"); done
+            for ((i=0; i<${#all_apps[@]}; i++)); do selected_status+=("false"); done
         fi
 
         local menu_result; show_selection_menu "$title" "$menu_action_key" all_apps selected_status
@@ -662,13 +782,31 @@ app_manager_interactive_handler() {
 
         if [[ $menu_result -eq 1 ]]; then log "User quit. No action taken." ""; continue; fi
         
+        # Check for multiple selections in Rollback mode
+        if [[ "$action" == "rollback" ]]; then
+            local count=0
+            for i in "${!selected_status[@]}"; do 
+                # CRITICAL FIX: Used '((count+=1))' instead of '((count++))' to avoid exit code 1 when count is 0
+                if ${selected_status[$i]}; then ((count+=1)); fi
+            done
+            
+            if [ $count -gt 1 ]; then
+                 echo -e "${C_RED}Rollback only supports one app at a time. Please select only one.${C_RESET}"; sleep 2; continue
+            fi
+            if [ $count -eq 0 ]; then
+                 echo -e "${C_YELLOW}No app selected.${C_RESET}"; sleep 1; continue
+            fi
+        fi
+
         log "Performing '$action' on selected ${app_type_name} apps" "${C_GREEN}Processing selected apps...${C_RESET}\n"
         for i in "${!all_apps[@]}"; do
-            # Pass the force_flag as the 3rd argument (ignored by stop/start usually, used by update)
             if ${selected_status[$i]}; then $task_func "${all_apps[$i]}" "$base_path/${all_apps[$i]}" "$force_flag"; fi
         done
-        log "All selected ${app_type_name} app processes for '$action' finished."
-        echo -e "\n${C_BLUE}Task complete. Press Enter...${C_RESET}"; read -r
+        
+        if [[ "$action" != "rollback" ]]; then
+            log "All selected ${app_type_name} app processes for '$action' finished."
+            echo -e "\n${C_BLUE}Task complete. Press Enter...${C_RESET}"; read -r
+        fi
     done
 }
 
@@ -1322,7 +1460,7 @@ update_secure_archive_settings() {
 update_unused_images_main() {
     check_root
     
-    # FIX: Use the global IS_CRON_RUN variable instead of local logic.
+    # Use the global IS_CRON_RUN variable instead of local logic.
     if [[ "$IS_CRON_RUN" == "false" ]]; then clear; fi
     
     log "Starting unused image update script." "${C_GREEN}--- Starting Unused Docker Image Updater ---${C_RESET}"
