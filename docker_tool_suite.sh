@@ -1,6 +1,6 @@
 #!/bin/bash
 # ======================================================================================
-# Docker Tool Suite v1.3.9
+# Docker Tool Suite v1.4.1
 # ======================================================================================
 
 # --- Strict Mode & Globals ---
@@ -98,26 +98,22 @@ execute_and_log() {
         return 0 # Assume success in dry run mode
     fi
 
-    # This implementation avoids `trap` to prevent "unbound variable" errors.
-    # It uses a temporary file and `tail -f` for real-time console output.
     local tmp_log; tmp_log=$(mktemp)
     local tail_pid
 
-    # Start `tail -f` in the background to stream the log to the console.
-    # We redirect its stderr to /dev/null to hide "Terminated" messages later.
     tail -f "$tmp_log" &> /dev/null &
     tail_pid=$!
 
-    # Execute the command, redirecting all its output to the temporary file.
     "$@" &> "$tmp_log"
     local exit_code=$?
 
-    # Give tail a moment to process the last lines of the file before killing it.
     sleep 0.1
-    kill "$tail_pid" 2>/dev/null || true # Kill the tail process, ignore errors if it's already gone.
+    kill "$tail_pid" 2>/dev/null || true
 
-    # Append the full output to the main log file and clean up.
-    cat "$tmp_log" >> "${LOG_FILE:-/dev/null}"
+    # Only append to the main log file if not running from cron.
+    if [[ "$IS_CRON_RUN" == "false" ]]; then
+        cat "$tmp_log" >> "${LOG_FILE:-/dev/null}"
+    fi
     rm -f "$tmp_log"
 
     return "$exit_code"
@@ -420,14 +416,19 @@ setup_cron_job() {
 
 _start_app_task() {
     local app_name="$1" app_dir="$2"
+    local extra_args="${3:-}" # Accept optional arguments
+
     log "Starting $app_name..."
     local compose_file; compose_file=$(find_compose_file "$app_dir")
     if [ -z "$compose_file" ]; then log "Warning: No compose file for '$app_name'. Skipping." ""; return; fi
     
     log "Pulling images for '$app_name'..."
+    # We generally want to ensure images exist, but 'up' will do it too. 
+    # Explicit pull is safer for ensuring we have what we expect before starting.
     if execute_and_log $SUDO_CMD docker compose -f "$compose_file" pull; then
-        log "Starting containers for '$app_name'..."
-        execute_and_log $SUDO_CMD docker compose -f "$compose_file" up -d
+        log "Starting containers for '$app_name' (Args: ${extra_args:-none})..."
+        # Pass extra_args (like --force-recreate) to the command
+        execute_and_log $SUDO_CMD docker compose -f "$compose_file" up -d $extra_args
         log "Successfully started '$app_name'."
     else
         log "ERROR: Failed to pull images for '$app_name'. Aborting start."
@@ -447,7 +448,9 @@ _stop_app_task() {
 
 _update_app_task() {
     local app_name="$1" app_dir="$2"
-    log "Updating $app_name..."
+    local force_mode="${3:-false}" # New argument: 'true' or 'false'
+
+    log "Updating $app_name (Force Mode: $force_mode)..."
     local compose_file; compose_file=$(find_compose_file "$app_dir")
     if [ -z "$compose_file" ]; then log "Warning: No compose file for '$app_name'. Skipping." ""; return; fi
     
@@ -462,10 +465,16 @@ _update_app_task() {
     
     local -a images_to_pull=()
     local all_pulls_succeeded=true
-    local update_was_found=false # Flag to track if a new image was actually downloaded
+    local update_was_found=false 
+
+    # If force mode is on, we treat it as if an update was found immediately
+    if [[ "$force_mode" == "true" ]]; then
+        update_was_found=true
+        log "Force mode enabled: Containers will be recreated regardless of image status."
+    fi
 
     if [ ${#all_app_images[@]} -eq 0 ]; then
-        log "No images defined in compose file for $app_name. Nothing to pull."
+        log "No images defined in compose file for $app_name."
     else
         for image in "${all_app_images[@]}"; do
             if [[ " ${IGNORED_IMAGES[*]-} " =~ " ${image} " ]]; then
@@ -480,50 +489,70 @@ _update_app_task() {
             for image in "${images_to_pull[@]}"; do
                 log "Checking image: $image" "   -> Checking ${C_BLUE}${image}${C_RESET}..."
                 
-                # We need to capture the output of `docker pull` to see if an update happened.
+                # 1. Capture Image ID BEFORE the pull
+                local id_before
+                id_before=$($SUDO_CMD docker inspect --format='{{.Id}}' "$image" 2>/dev/null || echo "not_found")
+
+                # 2. Perform the pull
                 local pull_output; pull_output=$($SUDO_CMD docker pull "$image" 2>&1)
                 local pull_exit_code=$?
-                
-                # Manually log the output since we aren't using execute_and_log here
-                echo "$pull_output" >> "${LOG_FILE:-/dev/null}"
+                echo "$pull_output" >> "${LOG_FILE:-/dev/null}" # Log raw output
                 
                 if [ "$pull_exit_code" -ne 0 ]; then
                     log "ERROR: Failed to pull image $image" "${C_BOLD_RED}Failed to pull ${image}. See log for details.${C_RESET}"
                     all_pulls_succeeded=false
                 else
-                    # Check the output for the string that indicates a successful new download.
-                    if echo "$pull_output" | grep -q "Downloaded newer image"; then
-                        log "New image found for $image." "   -> ${C_GREEN}Newer image downloaded!${C_RESET}"
+                    # 3. Capture Image ID AFTER the pull
+                    local id_after
+                    id_after=$($SUDO_CMD docker inspect --format='{{.Id}}' "$image" 2>/dev/null)
+
+                    # 4. Compare IDs
+                    if [[ "$id_before" != "$id_after" ]] || [[ "$id_before" == "not_found" ]]; then
+                        log "New image found for $image (Hash changed)." "   -> ${C_GREEN}Newer image downloaded!${C_RESET}"
                         update_was_found=true
+                    else
+                        log "Image $image is up to date."
                     fi
                 fi
             done
-        else
-            log "All images for '$app_name' are on the ignore list. No images to pull." "All images for '${app_name}' are on the ignore list. Nothing to pull."
         fi
     fi
 
-    # --- Step 2: Restart Application ONLY if updates were found ---
+    # --- Step 2: Restart Application ---
     if $all_pulls_succeeded; then
-        if $was_running; then
+        if $was_running || [[ "$force_mode" == "true" ]]; then
             if $update_was_found; then
-                echo -e "${C_GREEN}New image(s) found. Restarting '$app_name' to apply updates...${C_RESET}"
-                log "Stopping '$app_name' to apply updates..."
+                local restart_msg="Restarting"
+                local start_args=""
+                
+                if [[ "$force_mode" == "true" ]]; then
+                    echo -e "${C_GREEN}Force Recreate enabled. Recreating containers for '$app_name'...${C_RESET}"
+                    restart_msg="Force recreating"
+                    start_args="--force-recreate"
+                else
+                    echo -e "${C_GREEN}New image(s) found. Restarting '$app_name' to apply updates...${C_RESET}"
+                fi
+
+                log "$restart_msg '$app_name'..."
+                
+                # Stop first for a clean state
                 _stop_app_task "$app_name" "$app_dir"
                 
-                log "Starting '$app_name' with new images..."
-                _start_app_task "$app_name" "$app_dir"
-                log "Successfully updated and restarted '$app_name'."
+                log "Starting '$app_name'..."
+                # Pass the force flag to start task
+                _start_app_task "$app_name" "$app_dir" "$start_args"
+                
+                log "Successfully updated/recreated '$app_name'."
             else
-                log "All images for '$app_name' are already up to date. No restart needed."
+                log "App up to date. No action."
                 echo -e "All images for ${C_YELLOW}${app_name}${C_RESET} are up to date. No action taken."
             fi
         else
             log "Application '$app_name' was not running. Images checked, but app remains stopped."
         fi
     else
-        log "ERROR: Failed to pull one or more images for '$app_name'. Aborting restart to prevent issues."
-        echo -e "${C_BOLD_RED}Update for '$app_name' aborted due to pull failures. The application was not restarted.${C_RESET}"
+        log "ERROR: Failed to pull images for '$app_name'. Aborting."
+        echo -e "${C_BOLD_RED}Update for '$app_name' aborted due to pull failures.${C_RESET}"
     fi
 }
 
@@ -577,6 +606,7 @@ app_manager_interactive_handler() {
         local title=""
         local task_func=""
         local menu_action_key=""
+        local force_flag="false"
 
         case "$choice" in
             1)
@@ -584,7 +614,15 @@ app_manager_interactive_handler() {
             2)
                 action="stop"; title="Select ${app_type_name} Apps to STOP"; task_func="_stop_app_task"; menu_action_key="stop" ;;
             3)
-                action="update"; title="Select ${app_type_name} Apps to UPDATE"; task_func="_update_app_task"; menu_action_key="update" ;;
+                action="update"; title="Select ${app_type_name} Apps to UPDATE"; task_func="_update_app_task"; menu_action_key="update"
+                # Ask for force recreation preference
+                echo ""
+                read -p "Force recreate containers even if no updates found? (useful for config changes) [y/N]: " force_choice
+                if [[ "${force_choice,,}" =~ ^(y|yes)$ ]]; then
+                    force_flag="true"
+                    title="${title} (FORCE RECREATE)"
+                fi
+                ;;
             4) return ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1; continue ;;
         esac
@@ -607,7 +645,9 @@ app_manager_interactive_handler() {
         
         local -a selected_status=()
         if [[ "$action" == "stop" || "$action" == "update" ]]; then
-            title+=" (defaults to running)"
+            # Default to checking running apps, but strip (defaults to running) from title if we already added (FORCE RECREATE)
+            [[ "$force_flag" == "false" ]] && title+=" (defaults to running)"
+            
             declare -A running_apps_map
             while read -r project; do [[ -n "$project" ]] && running_apps_map["$project"]=1; done < <($SUDO_CMD docker compose ls --quiet)
             for app in "${all_apps[@]}"; do
@@ -624,7 +664,8 @@ app_manager_interactive_handler() {
         
         log "Performing '$action' on selected ${app_type_name} apps" "${C_GREEN}Processing selected apps...${C_RESET}\n"
         for i in "${!all_apps[@]}"; do
-            if ${selected_status[$i]}; then $task_func "${all_apps[$i]}" "$base_path/${all_apps[$i]}"; fi
+            # Pass the force_flag as the 3rd argument (ignored by stop/start usually, used by update)
+            if ${selected_status[$i]}; then $task_func "${all_apps[$i]}" "$base_path/${all_apps[$i]}" "$force_flag"; fi
         done
         log "All selected ${app_type_name} app processes for '$action' finished."
         echo -e "\n${C_BLUE}Task complete. Press Enter...${C_RESET}"; read -r
@@ -1279,11 +1320,11 @@ update_secure_archive_settings() {
 
 # --- Unused Image Updater Function ---
 update_unused_images_main() {
-    local is_cron_run=false
-    if [[ "${1-}" == "cron" ]]; then is_cron_run=true; fi
-
     check_root
-    if ! $is_cron_run; then clear; fi
+    
+    # FIX: Use the global IS_CRON_RUN variable instead of local logic.
+    if [[ "$IS_CRON_RUN" == "false" ]]; then clear; fi
+    
     log "Starting unused image update script." "${C_GREEN}--- Starting Unused Docker Image Updater ---${C_RESET}"
     if $DRY_RUN; then log "--- Starting in Dry Run mode. No changes will be made. ---" "${C_GRAY}[DRY RUN] No changes will be made.${C_RESET}"; fi
 
@@ -1631,7 +1672,6 @@ main_menu() {
 if [[ $# -gt 0 ]]; then
     if [[ ! -f "$CONFIG_FILE" ]]; then echo -e "${C_RED}Config not found. Please run with 'sudo' for initial setup.${C_RESET}"; exit 1; fi
     source "$CONFIG_FILE"
-    LOG_FILE="$LOG_DIR/$(date +'%Y-%m-%d').log"; mkdir -p "$LOG_DIR"
     prune_old_logs
     case "$1" in
         update)
