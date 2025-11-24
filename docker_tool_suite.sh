@@ -1,6 +1,6 @@
 #!/bin/bash
 # ======================================================================================
-# Docker Tool Suite v1.4.2.1
+# Docker Tool Suite v1.4.2.2
 # ======================================================================================
 
 # --- Strict Mode & Globals ---
@@ -60,8 +60,8 @@ encrypt_pass() {
     local plaintext="$1"
     local key
     key=$(get_secret_key)
-    # Encrypt with AES-256 and base64 encode for safe storage. Use printf for reliability.
-    printf '%s' "$plaintext" | openssl enc -aes-256-cbc -a -salt -pbkdf2 -pass pass:"$key"
+    # Encrypt with AES-256, base64 encode, and remove newlines for single-line storage.
+    printf '%s' "$plaintext" | openssl enc -aes-256-cbc -a -salt -pbkdf2 -pass pass:"$key" | tr -d '\n'
 }
 
 decrypt_pass() {
