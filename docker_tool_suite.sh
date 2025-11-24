@@ -1,6 +1,6 @@
 #!/bin/bash
 # ======================================================================================
-# Docker Tool Suite v1.4.2
+# Docker Tool Suite v1.4.2.1
 # ======================================================================================
 
 # --- Strict Mode & Globals ---
@@ -117,7 +117,7 @@ check_root() {
 }
 
 log() {
-    if [[ -n "${LOG_FILE-}" && "$IS_CRON_RUN" == "false" ]]; then echo "[$(date +'%Y-m-%d %H:%M:%S')] $1" >> "$LOG_FILE"; fi
+    if [[ -n "${LOG_FILE-}" && "$IS_CRON_RUN" == "false" ]]; then echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"; fi
     if [[ -n "${2-}" ]]; then echo -e "$2"; fi
 }
 
@@ -800,7 +800,13 @@ app_manager_interactive_handler() {
 
         log "Performing '$action' on selected ${app_type_name} apps" "${C_GREEN}Processing selected apps...${C_RESET}\n"
         for i in "${!all_apps[@]}"; do
-            if ${selected_status[$i]}; then $task_func "${all_apps[$i]}" "$base_path/${all_apps[$i]}" "$force_flag"; fi
+            if ${selected_status[$i]}; then 
+                if [[ "$task_func" == "_update_app_task" ]]; then
+                    $task_func "${all_apps[$i]}" "$base_path/${all_apps[$i]}" "$force_flag"
+                else
+                    $task_func "${all_apps[$i]}" "$base_path/${all_apps[$i]}"
+                fi
+            fi
         done
         
         if [[ "$action" != "rollback" ]]; then
