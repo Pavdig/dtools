@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # ======================================================================================
 
-SCRIPT_VERSION=v1.4.2.4
+SCRIPT_VERSION=v1.4.2.5
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -24,8 +24,13 @@ C_GRAY=$'\e[90m'
 C_RESET=$'\e[0m'
 TICKMARK=$'\e[32m\xE2\x9C\x93' # GREEN ✓
 
-optionsRandQ=( # Options to return and quit
+# --- Standardized Footer Options ---
+optionsRandQ=( # Options to Return and Quit
         "${C_GRAY}(R)eturn to previous menu${C_RESET}"
+        "${C_RED}(Q)uit the tool${C_RESET}"
+)
+
+optionsOnlyQ=( # Option for Main Menu (Quit only)
         "${C_RED}(Q)uit the tool${C_RESET}"
 )
 
@@ -47,7 +52,34 @@ fi
 CONFIG_DIR="/home/${CURRENT_USER}/.config/docker_tool_suite"
 CONFIG_FILE="${CONFIG_DIR}/config.conf"
 
-# --- Shared Helper Functions ---
+# --- SHARED UI FUNCTION ---
+# Usage: print_standard_menu "Title" array_reference "footer_mode(RQ|Q)"
+print_standard_menu() {
+    local title="$1"
+    local -n _menu_options="$2" # uses nameref
+    local footer_mode="${3:-RQ}" # Default to Return & Quit
+
+    clear
+    echo -e "${C_RESET}=============================================="
+    echo -e " ${C_GREEN}${title}"
+    echo -e "${C_RESET}=============================================="
+    
+    # Loop through the passed options array
+    for i in "${!_menu_options[@]}"; do
+        echo -e " ${C_YELLOW}$((i+1)))${C_RESET} ${_menu_options[$i]}"
+    done
+    
+    echo -e "${C_RESET}----------------------------------------------"
+    
+    # Display Footer based on mode
+    if [[ "$footer_mode" == "RQ" ]]; then
+        for i in "${!optionsRandQ[@]}"; do echo -e " ${optionsRandQ[$i]}"; done
+    elif [[ "$footer_mode" == "Q" ]]; then
+        for i in "${!optionsOnlyQ[@]}"; do echo -e " ${optionsOnlyQ[$i]}"; done
+    fi
+    
+    echo -e "${C_RESET}----------------------------------------------${C_YELLOW}"
+}
 
 # --- Encryption Helpers ---
 get_secret_key() {
@@ -722,14 +754,17 @@ app_manager_interactive_handler() {
     local base_path="$3"
 
     while true; do
-        clear
-        echo -e "==============================================\n   ${C_GREEN}Manage ${app_type_name} Apps${C_RESET}\n=============================================="
-        echo -e " ${C_YELLOW}1)${C_RESET} Start ${app_type_name} Apps"
-        echo -e " ${C_YELLOW}2)${C_RESET} Stop ${app_type_name} Apps"
-        echo -e " ${C_YELLOW}3)${C_RESET} Update ${app_type_name} Apps"
-        echo -e " ${C_YELLOW}4)${C_RESET} Rollback ${app_type_name} Apps"
-        echo -e " ${C_YELLOW}5)${C_RESET} Return to App Manager Menu"
-        echo "----------------------------------------------"
+        # Options array (Removed explicit Return/Quit numbers)
+        local options=(
+            "Start ${app_type_name} Apps"
+            "Stop ${app_type_name} Apps"
+            "Update ${app_type_name} Apps"
+            "Rollback ${app_type_name} Apps"
+        )
+        
+        # Use shared UI function
+        print_standard_menu "Manage ${app_type_name} Apps" options "RQ"
+        
         read -rp "Please select an option: " choice
 
         local action=""
@@ -755,7 +790,7 @@ app_manager_interactive_handler() {
             4)
                 action="rollback"; title="Select ONE App to Rollback"; task_func="_rollback_app_task"; menu_action_key="rollback"
                 ;;
-            5) return ;;
+            [rR]) return ;;
             [qQ]) exit 0 ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1; continue ;;
         esac
@@ -893,13 +928,9 @@ app_manager_menu() {
         "Control ESSENTIAL Apps"
         "Control MANAGED Apps"
         "STOP ALL RUNNING APPS"
-        "Return to Main Menu"
     )
     while true; do
-        clear
-        echo -e "==============================================\n   ${C_GREEN}Application Manager${C_RESET}\n=============================================="
-        for i in "${!options[@]}"; do echo -e " ${C_YELLOW}$((i+1)))${C_RESET} ${options[$i]}"; done
-        echo "----------------------------------------------"
+        print_standard_menu "Application Manager" options "RQ"
         read -rp "Please select an option: " choice
         case "$choice" in
             1) app_manager_status ;;
@@ -914,7 +945,7 @@ app_manager_menu() {
                 fi
                 echo -e "\n${C_BLUE}Task complete. Press Enter...${C_RESET}"; read -r
                 ;;
-            5) return ;;
+            [rR]) return ;;
             [qQ]) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
         esac
@@ -1282,19 +1313,15 @@ volume_manager_menu() {
         "Smart Backup (Stop/Start Apps)"
         "Restore Volumes"
         "Inspect / Manage a Volume"
-        "Return to Main Menu"
     )
     while true; do
-        clear
-        echo -e "==============================================\n   ${C_GREEN}Volume Manager${C_RESET}\n=============================================="
-        for i in "${!options[@]}"; do echo -e " ${C_YELLOW}$((i+1)))${C_RESET} ${options[$i]}"; done
-        echo "----------------------------------------------"
+        print_standard_menu "Volume Manager" options "RQ"
         read -rp "Please select an option: " choice
         case "$choice" in
             1) volume_smart_backup_main; echo -e "\nPress Enter to return..."; read -r;;
             2) volume_restore_main; echo -e "\nPress Enter to return..."; read -r;;
             3) volume_checker_main ;;
-            4) return ;;
+            [rR]) return ;;
             [qQ]) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
         esac
@@ -1403,17 +1430,18 @@ log_remover_main() {
 }
 
 log_manager_menu() {
-    local options=("View Logs" "Delete Logs" "Return to Main Menu")
+    local options=(
+        "View Logs"
+        "Delete Logs"
+    )
     while true; do
-        clear
-        echo -e "==============================================\n   ${C_GREEN}Log Manager${C_RESET}\n=============================================="
-        for i in "${!options[@]}"; do echo -e " ${C_YELLOW}$((i+1)))${C_RESET} ${options[$i]}"; done
-        echo "----------------------------------------------"
+        print_standard_menu "Log Manager" options "RQ"
         read -rp "Please select an option: " choice
         case "$choice" in
             1) _log_viewer_select_and_view ;;
             2) log_remover_main; echo -e "\nPress Enter to return..."; read -r ;;
-            3) return ;;
+            [rR]) return ;;
+            [qQ]) exit 0 ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
         esac
     done
@@ -1620,15 +1648,9 @@ utility_menu() {
         "Update Unused Images"
         "Clean Up Docker System"
         "Log Manager"
-        "Return to Main Menu"
     )
     while true; do
-        clear
-        echo -e "${C_RESET}=============================================="
-        echo -e " ${C_GREEN}Utilities"
-        echo -e "${C_RESET}=============================================="
-        for i in "${!options[@]}"; do echo -e " ${C_YELLOW}$((i+1)))${C_RESET} ${options[$i]}"; done
-        echo "----------------------------------------------"
+        print_standard_menu "Utilities" options "RQ"
         read -rp "Please select an option: " choice
         case "$choice" in
             1) settings_manager_menu ;;
@@ -1636,7 +1658,7 @@ utility_menu() {
             3) update_unused_images_main; echo -e "\nPress Enter to return..."; read -r ;;
             4) system_prune_main; echo -e "\nPress Enter to return..."; read -r ;;
             5) log_manager_menu ;;
-            6) return ;;
+            [rR]) return ;;
             [qQ]) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
         esac
@@ -1743,14 +1765,7 @@ settings_manager_menu() {
         "Schedule Unused Image Updater"
     )
     while true; do
-        clear
-        echo -e "${C_RESET}=============================================="
-        echo -e " ${C_GREEN}Settings Manager"
-        echo -e "${C_RESET}=============================================="
-        for i in "${!options[@]}"; do echo -e " ${C_YELLOW}$((i+1)))${C_RESET} ${options[$i]}"; done
-        echo -e "${C_RESET}----------------------------------------------"
-        for i in "${!optionsRandQ[@]}"; do echo -e " ${optionsRandQ[$i]}"; done
-        echo -e "${C_RESET}----------------------------------------------${C_YELLOW}"
+        print_standard_menu "Settings Manager" options "RQ"
         read -rp "Please select an option: " choice
         
         case "$choice" in
@@ -1795,7 +1810,7 @@ settings_manager_menu() {
                 setup_unused_images_cron_job
                 echo -e "\nPress Enter to return..."; read -r
                 ;;
-            [rR]) return ;; # Returns to previous menu
+            [rR]) return ;;
             [qQ]) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
         esac
@@ -1807,22 +1822,20 @@ settings_manager_menu() {
 # ======================================================================================
 
 main_menu() {
+    local options=(
+        "Application Manager"
+        "Volume Manager"
+        "Utilities"
+    )
     while true; do
-        clear
-        echo -e "${C_RESET}=============================================="
-        echo -e "${C_GREEN} Docker Tool Suite ${SCRIPT_VERSION}${C_RESET} - Welcome, ${C_BLUE}${CURRENT_USER}"
-        echo -e "${C_RESET}=============================================="
-        echo -e " ${C_YELLOW}1)${C_RESET} Application Manager"
-        echo -e " ${C_YELLOW}2)${C_RESET} Volume Manager"
-        echo -e " ${C_YELLOW}3)${C_RESET} Utilities"
-        echo -e " ${C_YELLOW}4)${C_RESET} Quit"
-        echo "----------------------------------------------"
-        read -rp "Please select an option [1-4]: " choice
+        # Use "Q" mode to show only Quit, not Return
+        print_standard_menu "Docker Tool Suite ${SCRIPT_VERSION} - ${C_BLUE}${CURRENT_USER}" options "Q"
+        
+        read -rp "Please select an option: " choice
         case "$choice" in
             1) app_manager_menu ;;
             2) volume_manager_menu ;;
             3) utility_menu ;;
-            4) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
             [qQ]) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
             *) echo -e "\n${C_RED}Invalid option: '$choice'.${C_RESET}"; sleep 1 ;;
         esac
