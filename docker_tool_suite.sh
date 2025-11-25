@@ -1,7 +1,9 @@
 #!/bin/bash
 # ======================================================================================
-# Docker Tool Suite v1.4.2.2
+# --- Docker Tool Suite ---
 # ======================================================================================
+
+SCRIPT_VERSION=v1.4.2.4
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -21,6 +23,11 @@ C_BLUE=$'\e[34m'
 C_GRAY=$'\e[90m'
 C_RESET=$'\e[0m'
 TICKMARK=$'\e[32m\xE2\x9C\x93' # GREEN ✓
+
+optionsRandQ=( # Options to return and quit
+        "${C_GRAY}(R)eturn to previous menu${C_RESET}"
+        "${C_RED}(Q)uit the tool${C_RESET}"
+)
 
 # --- User & Path Detection ---
 if [[ -n "${SUDO_USER-}" ]]; then
@@ -195,12 +202,14 @@ show_selection_menu() {
     [[ "$extra_options_key" == "update" ]] && extra_options_str=" (u)pdate,"
     while true; do
         clear
-        echo -e "=====================================================\n ${C_GREEN}${title}${C_RESET}\n Use number to toggle, (a) to toggle all\n====================================================="
+        echo -e "====================================================="
+        echo -e " ${C_GREEN}${title}${C_RESET}"
+        echo -e "====================================================="
         for i in "${!all_items_ref[@]}"; do
             if ${selected_status_ref[$i]}; then echo -e " $((i+1)). ${C_GREEN}[x]${C_RESET} ${all_items_ref[$i]}"; else echo -e " $((i+1)). ${C_RED}[ ]${C_RESET} ${all_items_ref[$i]}"; fi
         done
         echo "-----------------------------------------------------"
-        echo "Enter a number, (a)ll, (${action_verb:0:1}) to ${action_verb},${extra_options_str} or (q)uit."
+        echo "Enter a (${C_GREEN}No.${C_RESET}) to toggle one, ${C_BLUE}(a)ll${C_RESET}, ${C_YELLOW}(${action_verb:0:1}) ${C_RESET}to ${C_YELLOW}${action_verb}${C_RESET},${extra_options_str} ${C_GRAY}(r)eturn ${C_RESET}or ${C_RED}(q)uit${C_RESET}."
         read -rp "Your choice: " choice
         case "$choice" in
             [sS] | [${action_verb:0:1}])
@@ -215,6 +224,7 @@ show_selection_menu() {
                 return 0
                 ;;
             [uU]) if [[ "$extra_options_key" == "update" ]]; then return 2; else echo -e "${C_RED}Invalid choice.${C_RESET}"; sleep 1; fi ;;
+            [rR]) app_manager_menu ;;
             [qQ]) return 1 ;;
             [aA])
                 local all_selected=true; for status in "${selected_status_ref[@]}"; do if ! $status; then all_selected=false; break; fi; done
@@ -245,7 +255,7 @@ initial_setup() {
     if [[ $EUID -ne 0 ]]; then echo -e "${C_RED}Initial setup must be run with 'sudo ./docker_tool_suite.sh'. Exiting.${C_RESET}"; exit 1; fi
     clear
     echo -e "${C_BLUE}###############################################${C_RESET}"
-    echo -e "${C_BLUE}#   ${C_YELLOW}Welcome to the Docker Tool Suite Setup!   ${C_BLUE}#${C_RESET}"
+    echo -e "${C_BLUE}#   ${C_YELLOW}Welcome to the Docker Tool Suite ${SCRIPT_VERSION} Setup!   ${C_BLUE}#${C_RESET}"
     echo -e "${C_BLUE}###############################################${C_RESET}\n"
     echo "This one-time setup will configure all modules."
     echo -e "Settings will be saved to: ${C_GREEN}${CONFIG_FILE}${C_RESET}\n"
@@ -302,7 +312,7 @@ initial_setup() {
     RAR_DELETE_SOURCE_AFTER=$([[ "${rar_delete_src,,}" =~ ^(y|yes)$ ]] && echo "true" || echo "false")
 
     clear
-    echo -e "\n${C_GREEN}_--| Docker Tool Suite Setup |---_${C_RESET}\n"
+    echo -e "\n${C_GREEN}_--| Docker Tool Suite ${SCRIPT_VERSION} Setup |---_${C_RESET}\n"
     echo -e "${C_YELLOW}--- Configuration Summary ---${C_RESET}"
     echo "  App Manager:"
     echo -e "    Base Path:       ${C_GREEN}${APPS_BASE_PATH}${C_RESET}"
@@ -322,7 +332,7 @@ initial_setup() {
 
     echo -e "\n${C_GREEN}Saving configuration...${C_RESET}"; mkdir -p "${CONFIG_DIR}"
     {
-        echo "# --- Unified Configuration for Docker Tool Suite ---"
+        echo "# --- Unified Configuration for Docker Tool Suite ${SCRIPT_VERSION} ---"
         echo
         echo "# --- App Manager ---"
         printf "APPS_BASE_PATH=%q\n" "${APPS_BASE_PATH}"
@@ -746,6 +756,7 @@ app_manager_interactive_handler() {
                 action="rollback"; title="Select ONE App to Rollback"; task_func="_rollback_app_task"; menu_action_key="rollback"
                 ;;
             5) return ;;
+            [qQ]) exit 0 ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1; continue ;;
         esac
 
@@ -785,8 +796,7 @@ app_manager_interactive_handler() {
         # Check for multiple selections in Rollback mode
         if [[ "$action" == "rollback" ]]; then
             local count=0
-            for i in "${!selected_status[@]}"; do 
-                # CRITICAL FIX: Used '((count+=1))' instead of '((count++))' to avoid exit code 1 when count is 0
+            for i in "${!selected_status[@]}"; do
                 if ${selected_status[$i]}; then ((count+=1)); fi
             done
             
@@ -905,7 +915,7 @@ app_manager_menu() {
                 echo -e "\n${C_BLUE}Task complete. Press Enter...${C_RESET}"; read -r
                 ;;
             5) return ;;
-            q) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
+            [qQ]) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
         esac
     done
@@ -1285,7 +1295,7 @@ volume_manager_menu() {
             2) volume_restore_main; echo -e "\nPress Enter to return..."; read -r;;
             3) volume_checker_main ;;
             4) return ;;
-            q) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
+            [qQ]) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
         esac
     done
@@ -1614,7 +1624,9 @@ utility_menu() {
     )
     while true; do
         clear
-        echo -e "==============================================\n   ${C_GREEN}Utilities${C_RESET}\n=============================================="
+        echo -e "${C_RESET}=============================================="
+        echo -e " ${C_GREEN}Utilities"
+        echo -e "${C_RESET}=============================================="
         for i in "${!options[@]}"; do echo -e " ${C_YELLOW}$((i+1)))${C_RESET} ${options[$i]}"; done
         echo "----------------------------------------------"
         read -rp "Please select an option: " choice
@@ -1625,7 +1637,7 @@ utility_menu() {
             4) system_prune_main; echo -e "\nPress Enter to return..."; read -r ;;
             5) log_manager_menu ;;
             6) return ;;
-            q) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
+            [qQ]) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
         esac
     done
@@ -1729,13 +1741,16 @@ settings_manager_menu() {
         "Change Archive Settings"
         "Schedule Apps Updater"
         "Schedule Unused Image Updater"
-        "Return to Utilities"
     )
     while true; do
         clear
-        echo -e "==============================================\n   ${C_GREEN}Settings Manager${C_RESET}\n=============================================="
+        echo -e "${C_RESET}=============================================="
+        echo -e " ${C_GREEN}Settings Manager"
+        echo -e "${C_RESET}=============================================="
         for i in "${!options[@]}"; do echo -e " ${C_YELLOW}$((i+1)))${C_RESET} ${options[$i]}"; done
-        echo "----------------------------------------------"
+        echo -e "${C_RESET}----------------------------------------------"
+        for i in "${!optionsRandQ[@]}"; do echo -e " ${optionsRandQ[$i]}"; done
+        echo -e "${C_RESET}----------------------------------------------${C_YELLOW}"
         read -rp "Please select an option: " choice
         
         case "$choice" in
@@ -1780,8 +1795,8 @@ settings_manager_menu() {
                 setup_unused_images_cron_job
                 echo -e "\nPress Enter to return..."; read -r
                 ;;
-            7) return ;;
-            q) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
+            [rR]) return ;; # Returns to previous menu
+            [qQ]) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
         esac
     done
@@ -1794,7 +1809,9 @@ settings_manager_menu() {
 main_menu() {
     while true; do
         clear
-        echo -e "==============================================\n   ${C_GREEN}Docker Tool Suite${C_RESET} - Welcome, ${C_BLUE}${CURRENT_USER}${C_RESET}\n=============================================="
+        echo -e "${C_RESET}=============================================="
+        echo -e "${C_GREEN} Docker Tool Suite ${SCRIPT_VERSION}${C_RESET} - Welcome, ${C_BLUE}${CURRENT_USER}"
+        echo -e "${C_RESET}=============================================="
         echo -e " ${C_YELLOW}1)${C_RESET} Application Manager"
         echo -e " ${C_YELLOW}2)${C_RESET} Volume Manager"
         echo -e " ${C_YELLOW}3)${C_RESET} Utilities"
@@ -1806,7 +1823,7 @@ main_menu() {
             2) volume_manager_menu ;;
             3) utility_menu ;;
             4) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
-            q) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
+            [qQ]) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
             *) echo -e "\n${C_RED}Invalid option: '$choice'.${C_RESET}"; sleep 1 ;;
         esac
     done
