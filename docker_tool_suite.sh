@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # ======================================================================================
 
-SCRIPT_VERSION=v1.4.2.6
+SCRIPT_VERSION=v1.4.3
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -239,10 +239,10 @@ show_selection_menu() {
             if ${selected_status_ref[$i]}; then echo -e " $((i+1)). ${C_GREEN}[x]${C_RESET} ${all_items_ref[$i]}"; else echo -e " $((i+1)). ${C_RED}[ ]${C_RESET} ${all_items_ref[$i]}"; fi
         done
         echo "-----------------------------------------------------"
-        echo "Enter a (${C_GREEN}No.${C_RESET}) to toggle one, ${C_BLUE}(a)ll${C_RESET}, ${C_YELLOW}(${action_verb:0:1}) ${C_RESET}to ${C_YELLOW}${action_verb}${C_RESET}, ${C_GRAY}(r)eturn ${C_RESET}or ${C_RED}(q)uit${C_RESET}."
+        echo "Enter a (${C_GREEN}No.${C_RESET}) to toggle, ${C_BLUE}(a)ll${C_RESET}, ${C_YELLOW}(${action_verb}) ${C_RESET}to ${C_YELLOW}${action_verb}${C_RESET}, ${C_GRAY}(r)eturn ${C_RESET}or ${C_RED}(q)uit${C_RESET}."
         read -rp "Your choice: " choice
         case "$choice" in
-            [sS] | [${action_verb:0:1}])
+            "${action_verb}")
                 local any_selected=false
                 for status in "${selected_status_ref[@]}"; do
                     if $status; then any_selected=true; break; fi
@@ -253,7 +253,7 @@ show_selection_menu() {
                 fi
                 return 0
                 ;;
-            [rR]) return ;;
+            [rR]) return 1 ;;
             [qQ]) exit 0 ;;
             [aA])
                 local all_selected=true; for status in "${selected_status_ref[@]}"; do if ! $status; then all_selected=false; break; fi; done
@@ -306,14 +306,14 @@ initial_setup() {
     
     local -a selected_ignored_volumes=()
     read -p $'\n'"Do you want to configure ignored volumes now? (y/N): " config_vols
-    if [[ "${config_vols,,}" =~ ^(y|yes)$ ]]; then
+    if [[ "${config_vols,,}" =~ ^(y|Y|yes|YES)$ ]]; then
         mapfile -t all_volumes < <(docker volume ls --format "{{.Name}}" | sort)
         interactive_list_builder "Select Volumes to IGNORE during backup" all_volumes selected_ignored_volumes
     fi
     
     local -a selected_ignored_images=()
     read -p $'\n'"Do you want to configure ignored images now? (y/N): " config_imgs
-    if [[ "${config_imgs,,}" =~ ^(y|yes)$ ]]; then
+    if [[ "${config_imgs,,}" =~ ^(y|Y|yes|YES)$ ]]; then
         mapfile -t all_images < <(docker image ls --format "{{.Repository}}:{{.Tag}}" | grep -v "<none>" | sort)
         interactive_list_builder "Select Images to IGNORE during updates" all_images selected_ignored_images
     fi
@@ -338,7 +338,7 @@ initial_setup() {
     read -p "Default RAR Compression Level (0-5) [${C_GREEN}3${C_RESET}]: " rar_level
     RAR_COMPRESSION_LEVEL=${rar_level:-3}
     read -p "Delete original backup folder after creating RAR archive? (y/N): " rar_delete_src
-    RAR_DELETE_SOURCE_AFTER=$([[ "${rar_delete_src,,}" =~ ^(y|yes)$ ]] && echo "true" || echo "false")
+    RAR_DELETE_SOURCE_AFTER=$([[ "${rar_delete_src,,}" =~ ^(y|Y|yes|YES)$ ]] && echo "true" || echo "false")
 
     clear
     echo -e "\n${C_GREEN}_--| Docker Tool Suite ${SCRIPT_VERSION} Setup |---_${C_RESET}\n"
@@ -357,7 +357,7 @@ initial_setup() {
     echo -e "    Log Retention:   ${C_GREEN}${LOG_RETENTION_DAYS} days${C_RESET}\n"
     
     read -p "Save this configuration? (Y/n): " confirm_setup
-    if [[ ! "${confirm_setup,,}" =~ ^(y|yes)$ ]]; then echo -e "\n${C_RED}Setup canceled.${C_RESET}"; exit 0; fi
+    if [[ ! "${confirm_setup,,}" =~ ^(y|Y|yes|YES)$ ]]; then echo -e "\n${C_RED}Setup canceled.${C_RESET}"; exit 0; fi
 
     echo -e "\n${C_GREEN}Saving configuration...${C_RESET}"; mkdir -p "${CONFIG_DIR}"
     {
@@ -413,14 +413,14 @@ initial_setup() {
 setup_cron_job() {
     echo -e "\n${C_YELLOW}--- Optional: Schedule Automatic App Updates ---${C_RESET}"
     read -p "Would you like to schedule the app updater to run automatically? (Y/n): " schedule_now
-    if [[ ! "$(echo "${schedule_now:-y}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|yes)$ ]]; then
+    if [[ ! "$(echo "${schedule_now:-y}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|Y|yes|YES)$ ]]; then
         echo -e "${C_YELLOW}Skipping cron job setup.${C_RESET}"; return
     fi
     
     local cron_target_user="root"
     echo "The script needs Docker permissions to run. We recommend running the scheduled task as 'root'."
     read -p "Run the scheduled task as 'root'? (Y/n): " confirm_root
-    if [[ ! "$(echo "${confirm_root:-y}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|yes)$ ]]; then
+    if [[ ! "$(echo "${confirm_root:-y}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|Y|yes|YES)$ ]]; then
         echo -e "${C_YELLOW}Cron job setup canceled.${C_RESET}"; return
     fi
 
@@ -688,7 +688,7 @@ _rollback_app_task() {
 
         echo -e "\n${C_BOLD_RED}WARNING: This will force '${r_name}' to point to ID '${r_id:7:12}' locally.${C_RESET}"
         read -p "Are you sure? (y/N): " confirm
-        if [[ "${confirm,,}" =~ ^(y|yes)$ ]]; then
+        if [[ "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then
             log "Rolling back $app_name image $r_name to $r_id..."
             
             # 1. Retag the old ID to the current name
@@ -779,7 +779,7 @@ app_manager_interactive_handler() {
                 action="update"; title="Select ${app_type_name} Apps to UPDATE"; task_func="_update_app_task"; menu_action_key="update"
                 echo ""
                 read -p "Force recreate containers even if no updates found? (useful for config changes) [y/N]: " force_choice
-                if [[ "${force_choice,,}" =~ ^(y|yes)$ ]]; then
+                if [[ "${force_choice,,}" =~ ^(y|Y|yes|YES)$ ]]; then
                     force_flag="true"
                     title="${title} (FORCE RECREATE)"
                 fi
@@ -935,7 +935,7 @@ app_manager_menu() {
             3) app_manager_interactive_handler "Managed" "$APPS_BASE_PATH/$MANAGED_SUBDIR" "$APPS_BASE_PATH/$MANAGED_SUBDIR" ;;
             4) 
                 read -r -p "$(printf "\n${C_BOLD_RED}This will stop ALL running compose applications. Are you sure? [y/N]: ${C_RESET}")" confirm
-                if [[ "${confirm,,}" =~ ^(y|yes)$ ]]; then
+                if [[ "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then
                     app_manager_stop_all
                 else
                     echo -e "\n${C_YELLOW}Operation canceled.${C_RESET}"
@@ -968,9 +968,16 @@ run_in_volume() { local volume_name="$1"; shift; $SUDO_CMD docker run --rm -v "$
 volume_checker_inspect() {
     local volume_name="$1"
     echo -e "\n${C_BLUE}--- Inspecting '${volume_name}' ---${C_RESET}"; $SUDO_CMD docker volume inspect "${volume_name}"
+}
+
+volume_checker_list_files() {
+    local volume_name="$1"
     echo -e "\n${C_BLUE}--- Listing files in '${volume_name}' ---${C_RESET}"; run_in_volume "${volume_name}" ls -lah /volume
+}
+
+volume_checker_calculate_size() {
+    local volume_name="$1"
     echo -e "\n${C_BLUE}--- Calculating total size of '${volume_name}' ---${C_RESET}"; run_in_volume "${volume_name}" du -sh /volume
-    echo -e "\n${C_BLUE}--- Top 10 largest files/folders in '${volume_name}' ---${C_RESET}"; run_in_volume "${volume_name}" sh -c 'du -ah /volume | sort -hr | head -n 10'
 }
 
 volume_checker_explore() {
@@ -983,7 +990,7 @@ volume_checker_explore() {
 volume_checker_remove() {
     local volume_name="$1"
     read -r -p "$(printf "\n${C_YELLOW}Permanently delete volume '${C_BLUE}%s${C_YELLOW}'? [y/N]: ${C_RESET}" "${volume_name}")" confirm
-    if [[ "${confirm,,}" =~ ^(y|yes)$ ]]; then
+    if [[ "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then
         echo -e "-> Deleting volume '${volume_name}'..."
         if execute_and_log $SUDO_CMD docker volume rm "${volume_name}"; then echo -e "${C_GREEN}Volume successfully deleted.${C_RESET}"; sleep 2; return 0; else echo -e "${C_RED}Error: Failed to delete. It might be in use.${C_RESET}"; sleep 3; return 1; fi
     else echo -e "-> Deletion cancelled.${C_RESET}"; sleep 1; return 1; fi
@@ -991,16 +998,32 @@ volume_checker_remove() {
 
 volume_checker_menu() {
     local volume_name="$1"
+    clear; volume_checker_inspect "${volume_name}"
     while true; do
-        clear; volume_checker_inspect "${volume_name}"
-        echo -e "\n${C_BLUE}--- Actions for '${volume_name}' ---${C_RESET}"
-        local options=("Return to volume list" "Explore volume (interactive shell)" "Remove volume" "Quit")
-        PS3=$'\n'"Enter action number: "; select action in "${options[@]}"; do
+        local options=(
+            "${C_YELLOW}List volume files${C_RESET}"
+            "${C_YELLOW}Calculate volume size${C_RESET}"
+            "${C_BLUE}Explore volume in shell${C_RESET}"
+            "${C_BOLD_RED}Remove volume${C_RESET}"
+            "${C_GRAY}Return to volume list${C_RESET}"
+            "${C_RED}Quit${C_RESET}"
+        )
+        PS3=$'\n'"${C_YELLOW}Enter action number: ${C_RESET}"; select action in "${options[@]}"; do
             case "$action" in
-                "Return to volume list") return ;;
-                "Explore volume (interactive shell)") volume_checker_explore "${volume_name}"; break ;;
-                "Remove volume") if volume_checker_remove "${volume_name}"; then return; fi; break ;;
-                "Quit") exit 0 ;;
+                "${C_YELLOW}List volume files${C_RESET}")
+                    volume_checker_list_files "${volume_name}"
+                    echo -e "\n${C_BLUE}Action complete. Press Enter to return to menu...${C_RESET}"; read -r
+                    break
+                    ;;
+                "${C_YELLOW}Calculate volume size${C_RESET}")
+                    volume_checker_calculate_size "${volume_name}"
+                    echo -e "\n${C_BLUE}Action complete. Press Enter to return to menu...${C_RESET}"; read -r
+                    break
+                    ;;
+                "${C_BLUE}Explore volume in shell${C_RESET}") volume_checker_explore "${volume_name}"; break ;;
+                "${C_BOLD_RED}Remove volume${C_RESET}") if volume_checker_remove "${volume_name}"; then return; fi; break ;;
+                "${C_GRAY}Return to volume list${C_RESET}") return ;;
+                "${C_RED}Quit${C_RESET}") exit 0 ;;
                 *) echo -e "${C_RED}Invalid option '$REPLY'${C_RESET}"; sleep 1; break ;;
             esac
         done
@@ -1012,10 +1035,10 @@ volume_checker_main() {
     while true; do
         clear; echo -e "${C_GREEN}_--| Inspect & Manage Volumes |---_${C_RESET}"
         mapfile -t volumes < <($SUDO_CMD docker volume ls --format "{{.Name}}")
-        if [ ${#volumes[@]} -eq 0 ]; then echo -e "${C_YELLOW}No Docker volumes found.${C_RESET}"; sleep 2; return; fi
-        echo -e "\n${C_YELLOW}Please select a volume to manage:${C_RESET}"
-        PS3=$'\n'"Enter number (or q to return): "; select volume_name in "${volumes[@]}"; do
-            if [[ "$REPLY" == "q" ]]; then return; fi
+        if [ ${#volumes[@]} -eq 0 ]; then echo -e "${C_RED}No Docker volumes found.${C_RESET}"; sleep 2; return; fi
+        echo -e "\n${C_BLUE}Volume list:${C_RESET}"
+        PS3=$'\n'"${C_YELLOW}Enter volume ${C_BLUE}No. ${C_YELLOW}or ${C_GRAY}(r) ${C_YELLOW}to ${C_GRAY}return back${C_RESET}: "; select volume_name in "${volumes[@]}"; do
+            if [[ "$REPLY" == "r" || "$REPLY" == "R" ]]; then return; fi
             if [[ -n "$volume_name" ]]; then volume_checker_menu "${volume_name}"; break; else echo -e "${C_RED}Invalid selection.${C_RESET}"; fi
         done
     done
@@ -1283,7 +1306,7 @@ volume_restore_main() {
     fi
     
     echo -e "\n${C_RED}This will OVERWRITE existing data in corresponding volumes!${C_RESET}"; read -p "Are you sure? (y/N): " confirm
-    if [[ ! "${confirm,,}" =~ ^(y|yes)$ ]]; then echo -e "${C_RED}Restore canceled.${C_RESET}"; return; fi
+    if [[ ! "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then echo -e "${C_RED}Restore canceled.${C_RESET}"; return; fi
     
     for backup_file in "${selected_files[@]}"; do
         local base_name; base_name=$(basename "$backup_file"); local volume_name="${base_name%%.tar.*}"
@@ -1347,7 +1370,7 @@ system_prune_main() {
     echo "  - all build cache"
     echo ""
     read -r -p "$(printf "${C_BOLD_RED}This action is IRREVERSIBLE. Are you sure? [y/N]: ${C_RESET}")" confirm
-    if [[ "${confirm,,}" =~ ^(y|yes)$ ]]; then
+    if [[ "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then
         echo -e "\n${C_YELLOW}Pruning system...${C_RESET}"
         execute_and_log $SUDO_CMD docker system prune -af
         echo -e "\n${C_GREEN}${TICKMARK} System prune complete.${C_RESET}"
@@ -1419,7 +1442,7 @@ log_remover_main() {
 
     echo -e "\n${C_BOLD_RED}You are about to permanently delete ${#files_to_delete[@]} log file(s).${C_RESET}"
     read -p "Are you sure? [y/N]: " confirm
-    if [[ ! "${confirm,,}" =~ ^(y|yes)$ ]]; then echo -e "${C_RED}Deletion canceled.${C_RESET}"; sleep 1; return; fi
+    if [[ ! "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then echo -e "${C_RED}Deletion canceled.${C_RESET}"; sleep 1; return; fi
     
     echo ""
     for file in "${files_to_delete[@]}"; do
@@ -1483,7 +1506,6 @@ update_secure_archive_settings() {
     local new_config_line
     new_config_line=$(printf "ENCRYPTED_RAR_PASSWORD=%q" "${ENCRYPTED_RAR_PASSWORD}")
 
-    # Use a more robust sed 's' command to replace the line if it exists, otherwise append it.
     # --- Robustly update the config file ---
     # 1. Delete any existing ENCRYPTED_RAR_PASSWORD lines to prevent duplicates and clean up.
     sed -i '/^ENCRYPTED_RAR_PASSWORD=/d' "$CONFIG_FILE"
@@ -1586,14 +1608,14 @@ setup_unused_images_cron_job() {
     check_root
     echo -e "\n${C_YELLOW}--- Schedule Automatic Unused Image Updates ---${C_RESET}"
     read -p "Would you like to schedule the unused image updater to run automatically? (Y/n): " schedule_now
-    if [[ ! "$(echo "${schedule_now:-y}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|yes)$ ]]; then
+    if [[ ! "$(echo "${schedule_now:-y}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|Y|yes|YES)$ ]]; then
         echo -e "${C_YELLOW}Skipping cron job setup.${C_RESET}"; return
     fi
     
     local cron_target_user="root"
     echo "The script needs Docker permissions to run. We recommend running the scheduled task as 'root'."
     read -p "Run the scheduled task as 'root'? (Y/n): " confirm_root
-    if [[ ! "$(echo "${confirm_root:-y}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|yes)$ ]]; then
+    if [[ ! "$(echo "${confirm_root:-y}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|Y|yes|YES)$ ]]; then
         echo -e "${C_YELLOW}Cron job setup canceled.${C_RESET}"; return
     fi
 
@@ -1798,7 +1820,7 @@ settings_manager_menu() {
                 
                 local current_delete_val=${RAR_DELETE_SOURCE_AFTER:-false}
                 read -p "Delete original backup folder after archiving? (y/N) [Current: ${C_GREEN}${current_delete_val}${C_RESET}]: " rar_delete
-                local new_val=$([[ "${rar_delete,,}" =~ ^(y|yes)$ ]] && echo "true" || echo "false")
+                local new_val=$([[ "${rar_delete,,}" =~ ^(y|Y|yes|YES)$ ]] && echo "true" || echo "false")
                 sed -i "/^RAR_DELETE_SOURCE_AFTER=/c\RAR_DELETE_SOURCE_AFTER=${new_val}" "$CONFIG_FILE"
                 source "$CONFIG_FILE"
                 echo -e "${C_GREEN}${TICKMARK} Setting 'RAR_DELETE_SOURCE_AFTER' updated.${C_RESET}"
