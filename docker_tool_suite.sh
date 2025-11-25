@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # ======================================================================================
 
-SCRIPT_VERSION=v1.4.2.5
+SCRIPT_VERSION=v1.4.2.6
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -230,8 +230,6 @@ discover_apps() {
 
 show_selection_menu() {
     local title="$1" action_verb="$2"; local -n all_items_ref="$3"; local -n selected_status_ref="$4"
-    local extra_options_key="${5:-}"; local extra_options_str=""
-    [[ "$extra_options_key" == "update" ]] && extra_options_str=" (u)pdate,"
     while true; do
         clear
         echo -e "====================================================="
@@ -241,7 +239,7 @@ show_selection_menu() {
             if ${selected_status_ref[$i]}; then echo -e " $((i+1)). ${C_GREEN}[x]${C_RESET} ${all_items_ref[$i]}"; else echo -e " $((i+1)). ${C_RED}[ ]${C_RESET} ${all_items_ref[$i]}"; fi
         done
         echo "-----------------------------------------------------"
-        echo "Enter a (${C_GREEN}No.${C_RESET}) to toggle one, ${C_BLUE}(a)ll${C_RESET}, ${C_YELLOW}(${action_verb:0:1}) ${C_RESET}to ${C_YELLOW}${action_verb}${C_RESET},${extra_options_str} ${C_GRAY}(r)eturn ${C_RESET}or ${C_RED}(q)uit${C_RESET}."
+        echo "Enter a (${C_GREEN}No.${C_RESET}) to toggle one, ${C_BLUE}(a)ll${C_RESET}, ${C_YELLOW}(${action_verb:0:1}) ${C_RESET}to ${C_YELLOW}${action_verb}${C_RESET}, ${C_GRAY}(r)eturn ${C_RESET}or ${C_RED}(q)uit${C_RESET}."
         read -rp "Your choice: " choice
         case "$choice" in
             [sS] | [${action_verb:0:1}])
@@ -251,13 +249,12 @@ show_selection_menu() {
                 done
                 if ! $any_selected; then
                     echo -e "${C_YELLOW}No items selected. Press Enter to continue...${C_RESET}"; read -r
-                    continue # Go back to the menu loop
+                    continue
                 fi
                 return 0
                 ;;
-            [uU]) if [[ "$extra_options_key" == "update" ]]; then return 2; else echo -e "${C_RED}Invalid choice.${C_RESET}"; sleep 1; fi ;;
-            [rR]) app_manager_menu ;;
-            [qQ]) return 1 ;;
+            [rR]) return ;;
+            [qQ]) exit 0 ;;
             [aA])
                 local all_selected=true; for status in "${selected_status_ref[@]}"; do if ! $status; then all_selected=false; break; fi; done
                 local new_status; new_status=$(if $all_selected; then echo "false"; else echo "true"; fi)
@@ -1318,8 +1315,14 @@ volume_manager_menu() {
         print_standard_menu "Volume Manager" options "RQ"
         read -rp "Please select an option: " choice
         case "$choice" in
-            1) volume_smart_backup_main; echo -e "\nPress Enter to return..."; read -r;;
-            2) volume_restore_main; echo -e "\nPress Enter to return..."; read -r;;
+            1) 
+                volume_smart_backup_main
+                echo -e "\nPress Enter to return..."; read -r
+                ;;
+            2) 
+                volume_restore_main
+                echo -e "\nPress Enter to return..."; read -r
+                ;;
             3) volume_checker_main ;;
             [rR]) return ;;
             [qQ]) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
