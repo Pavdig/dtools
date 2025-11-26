@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # ======================================================================================
 
-SCRIPT_VERSION=v1.4.3.1
+SCRIPT_VERSION=v1.4.3.2
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -64,9 +64,10 @@ print_standard_menu() {
     echo -e " ${C_GREEN}${title}"
     echo -e "${C_RESET}=============================================="
     
+    echo -e " ${C_YELLOW}Options: "
     # Loop through the passed options array
     for i in "${!_menu_options[@]}"; do
-        echo -e " ${C_YELLOW}$((i+1)))${C_RESET} ${_menu_options[$i]}"
+        echo -e " ${C_BLUE}$((i+1))${C_YELLOW}) ${C_RESET}${_menu_options[$i]}"
     done
     
     echo -e "${C_RESET}----------------------------------------------"
@@ -78,7 +79,7 @@ print_standard_menu() {
         for i in "${!optionsOnlyQ[@]}"; do echo -e " ${optionsOnlyQ[$i]}"; done
     fi
     
-    echo -e "${C_RESET}----------------------------------------------${C_YELLOW}"
+    echo -e "${C_RESET}----------------------------------------------${C_RESET}"
 }
 
 # --- Encryption Helpers ---
@@ -755,7 +756,7 @@ app_manager_interactive_handler() {
     local base_path="$3"
 
     while true; do
-        # Options array (Removed explicit Return/Quit numbers)
+        # Options array
         local options=(
             "Start ${app_type_name} Apps"
             "Stop ${app_type_name} Apps"
@@ -766,7 +767,7 @@ app_manager_interactive_handler() {
         # Use shared UI function
         print_standard_menu "Manage ${app_type_name} Apps" options "RQ"
         
-        read -rp "Please select an option: " choice
+        read -rp "${C_YELLOW}Please select an option: ${C_RESET}" choice
 
         local action=""
         local title=""
@@ -932,7 +933,7 @@ app_manager_menu() {
     )
     while true; do
         print_standard_menu "Application Manager" options "RQ"
-        read -rp "Please select an option: " choice
+        read -rp "${C_YELLOW}Please select an option: ${C_RESET}" choice
         case "$choice" in
             1) app_manager_status ;;
             2) app_manager_interactive_handler "Essential" "$APPS_BASE_PATH" "$APPS_BASE_PATH" ;;
@@ -1037,12 +1038,18 @@ volume_checker_menu() {
 volume_checker_main() {
     ensure_backup_image
     while true; do
-        clear; echo -e "${C_GREEN}_--| Inspect & Manage Volumes |---_${C_RESET}"
+        clear
+        echo -e "${C_RESET}=============================================="
+        echo -e " ${C_GREEN}Docker Tool Suite ${SCRIPT_VERSION}"
+        echo -e "${C_RESET}=============================================="
+        echo -e "${C_BLUE}--- Inspect & Manage Volumes ---"
+        echo -e "${C_RESET}----------------------------------------------\n"
         mapfile -t volumes < <($SUDO_CMD docker volume ls --format "{{.Name}}")
         if [ ${#volumes[@]} -eq 0 ]; then echo -e "${C_RED}No Docker volumes found.${C_RESET}"; sleep 2; return; fi
-        echo -e "\n${C_BLUE}Volume list:${C_RESET}"
-        PS3=$'\n'"${C_YELLOW}Enter volume ${C_BLUE}No. ${C_YELLOW}or ${C_GRAY}(r) ${C_YELLOW}to ${C_GRAY}return back${C_RESET}: "; select volume_name in "${volumes[@]}"; do
+        echo -e "${C_BLUE}Volume list:${C_RESET}"
+        PS3=$'\n'"${C_YELLOW}Enter ${C_BLUE}volume No${C_YELLOW}; ${C_GRAY}(r)eturn ${C_YELLOW}or ${C_RED}(q)uit${C_RESET}: "; select volume_name in "${volumes[@]}"; do
             if [[ "$REPLY" == "r" || "$REPLY" == "R" ]]; then return; fi
+            if [[ "$REPLY" == "q" || "$REPLY" == "Q" ]]; then exit 0; fi
             if [[ -n "$volume_name" ]]; then volume_checker_menu "${volume_name}"; break; else echo -e "${C_RED}Invalid selection.${C_RESET}"; fi
         done
     done
@@ -1171,7 +1178,7 @@ volume_smart_backup_main() {
     echo -e "\n${C_GREEN}${TICKMARK} All backup tasks completed successfully!${C_RESET}"
 
     # --- Phase 4: Create Secure RAR Archive ---
-    read -p $'\n'"Create a single, password-protected RAR archive from this backup? (Y/n): " create_rar
+    read -p $'\n'"${C_BLUE}Do you want to create a password-protected RAR archive of this backup? (Y/N): " create_rar
     if [[ ! "${create_rar:-y}" =~ ^[Yy]$ ]]; then
         echo -e "${C_YELLOW}Skipping RAR archive creation.${C_RESET}"; return
     fi
@@ -1181,8 +1188,8 @@ volume_smart_backup_main() {
     local password_is_set=false
 
     if [[ -n "${ENCRYPTED_RAR_PASSWORD-}" ]]; then
-        echo -e "\n${C_YELLOW}A default archive password is configured.${C_RESET}"
-        read -p "Choose an option: (U)se default, (E)nter different, (N)o password, (C)ancel: " pass_choice
+        echo -e "\n${C_BLUE}A default archive password is configured.${C_RESET}\n"
+        read -p "${C_RESET}Choose an option: ${C_BLUE}(U)se saved${C_RESET}, ${C_YELLOW}(E)nter new${C_RESET}, ${C_GRAY}(N)o password${C_RESET}, ${C_RED}(C)ancel: " pass_choice
         case "${pass_choice,,}" in
             u|use|"")
                 archive_password=$(decrypt_pass "${ENCRYPTED_RAR_PASSWORD}")
@@ -1190,15 +1197,15 @@ volume_smart_backup_main() {
                     echo -e "${C_BOLD_RED}Error: Failed to decrypt the stored RAR password.${C_RESET}"
                     echo -e "${C_YELLOW}Please enter the password manually.${C_RESET}"
                 else
-                    echo -e "${C_GREEN}Using the default stored password.${C_RESET}"
+                    echo -e "${C_BLUE}Using the stored password.${C_RESET}"
                     password_is_set=true
                 fi
                 ;;
             e|enter)
-                echo "-> You chose to enter a different password for this backup session."
+                echo -e "${C_YELLOW}-> You chose to enter a different password for this backup session.${C_RESET}"
                 ;; # Fall through to the manual entry block
             n|no)
-                echo -e "${C_GREEN}Creating archive with no password.${C_RESET}"
+                echo -e "${C_YELLOW}Creating archive with no password.${C_RESET}"
                 archive_password=""
                 password_is_set=true
                 ;;
@@ -1338,7 +1345,7 @@ volume_manager_menu() {
     )
     while true; do
         print_standard_menu "Volume Manager" options "RQ"
-        read -rp "Please select an option: " choice
+        read -rp "${C_YELLOW}Please select an option: ${C_RESET}" choice
         case "$choice" in
             1) 
                 volume_smart_backup_main
@@ -1403,20 +1410,29 @@ _log_viewer_select_and_view() {
             echo -e "${C_YELLOW}No log files found to view.${C_RESET}"; sleep 2; return
         fi
 
-        echo -e "${C_YELLOW}--- Log Viewer ---${C_RESET}\nSelect a log file to view:"
+        echo -e "${C_RESET}=============================================="
+        echo -e " ${C_GREEN}Docker Tool Suite ${SCRIPT_VERSION}"
+        echo -e "${C_RESET}=============================================="
+        echo -e "${C_BLUE}--- Log Viewer ---"
+        echo -e "${C_RESET}----------------------------------------------\n"
+        echo -e "${C_YELLOW}Select a log file to view:${C_RESET}"
         
         local -a display_options=()
         for file in "${log_files[@]}"; do
-            display_options+=("$(realpath --relative-to="$LOG_DIR" "$file")")
+            display_options+=("${C_GREEN}$(realpath --relative-to="$LOG_DIR" "$file")${C_RESET}")
         done
-        display_options+=("Return to Log Manager")
+        display_options+=("${C_GRAY}Return to Log Manager${C_RESET}")
         
-        PS3=$'\n'"Enter your choice: "
+        PS3=$'\n'"${C_YELLOW}Enter your choice: ${C_RESET}"
         select choice in "${display_options[@]}"; do
-            if [[ "$choice" == "Return to Log Manager" ]]; then
+            if [[ "$choice" == "${C_GRAY}Return to Log Manager${C_RESET}" ]]; then
                 return
             elif [[ -n "$choice" ]]; then
                 local idx=$((REPLY - 1))
+                echo -e "${C_RESET}----------------------------------------------"
+                echo -e "\n${C_BLUE}Opening log ${display_options[$idx]}"
+                echo -e "${C_RESET}----------------------------------------------\n"
+                echo -e "${C_GREEN}--- Log START ---${C_RESET}"
                 less -RX --prompt="$less_prompt" "${log_files[$idx]}"
                 break
             else
@@ -1443,7 +1459,7 @@ log_remover_main() {
     if [ ${#files_to_delete[@]} -eq 0 ]; then echo -e "\n${C_YELLOW}No logs selected.${C_RESET}"; sleep 1; return; fi
 
     echo -e "\n${C_BOLD_RED}You are about to permanently delete ${#files_to_delete[@]} log file(s).${C_RESET}"
-    read -p "Are you sure? [y/N]: " confirm
+    read -p "${C_YELLOW}Are you sure? [${C_RESET}Y${C_YELLOW}/${C_RESET}N${C_YELLOW}]: ${C_RESET}" confirm
     if [[ ! "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then echo -e "${C_RED}Deletion canceled.${C_RESET}"; sleep 1; return; fi
     
     echo ""
@@ -1464,7 +1480,7 @@ log_manager_menu() {
     )
     while true; do
         print_standard_menu "Log Manager" options "RQ"
-        read -rp "Please select an option: " choice
+        read -rp "${C_YELLOW}Please select an option: ${C_RESET}" choice
         case "$choice" in
             1) _log_viewer_select_and_view ;;
             2) log_remover_main; echo -e "\nPress Enter to return..."; read -r ;;
@@ -1678,7 +1694,7 @@ utility_menu() {
     )
     while true; do
         print_standard_menu "Utilities" options "RQ"
-        read -rp "Please select an option: " choice
+        read -rp "${C_YELLOW}Please select an option: ${C_RESET}" choice
         case "$choice" in
             1) settings_manager_menu ;;
             2) app_manager_update_all_known_apps; echo -e "\nPress Enter to return..."; read -r ;;
@@ -1793,7 +1809,7 @@ settings_manager_menu() {
     )
     while true; do
         print_standard_menu "Settings Manager" options "RQ"
-        read -rp "Please select an option: " choice
+        read -rp "${C_YELLOW}Please select an option: ${C_RESET}" choice
         
         case "$choice" in
             1) # Path Settings
@@ -1852,7 +1868,7 @@ main_menu() {
         # Use "Q" mode to show only Quit, not Return
         print_standard_menu "Docker Tool Suite ${SCRIPT_VERSION} - ${C_BLUE}${CURRENT_USER}" options "Q"
         
-        read -rp "Please select an option: " choice
+        read -rp "${C_YELLOW}Please select an option: ${C_RESET}" choice
         case "$choice" in
             1) app_manager_menu ;;
             2) volume_manager_menu ;;
