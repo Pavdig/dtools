@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # ======================================================================================
 
-SCRIPT_VERSION=v1.4.3
+SCRIPT_VERSION=v1.4.3.1
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -283,20 +283,22 @@ initial_setup() {
     # This function must be run as root
     if [[ $EUID -ne 0 ]]; then echo -e "${C_RED}Initial setup must be run with 'sudo ./docker_tool_suite.sh'. Exiting.${C_RESET}"; exit 1; fi
     clear
-    echo -e "${C_BLUE}###############################################${C_RESET}"
-    echo -e "${C_BLUE}#   ${C_YELLOW}Welcome to the Docker Tool Suite ${SCRIPT_VERSION} Setup!   ${C_BLUE}#${C_RESET}"
-    echo -e "${C_BLUE}###############################################${C_RESET}\n"
-    echo "This one-time setup will configure all modules."
-    echo -e "Settings will be saved to: ${C_GREEN}${CONFIG_FILE}${C_RESET}\n"
+    echo -e "${C_RESET}================================================"
+    echo -e "${C_GREEN} Welcome to the ${C_BLUE}Docker Tool Suite ${SCRIPT_VERSION} ${C_GREEN}Setup!"
+    echo -e "${C_RESET}================================================\n"
+    echo -e "${C_YELLOW}This one-time setup will configure all modules.\n"
+    echo -e "${C_RESET}Settings will be saved to: ${C_GREEN}${CONFIG_FILE}${C_RESET}\n"
 
     local apps_path_def="/home/${CURRENT_USER}/apps"
     local managed_subdir_def="managed_stacks"
-    local backup_path_def="/home/${CURRENT_USER}/backups/volume-backups"
-    local restore_path_def="/home/${CURRENT_USER}/backups/restore-folder"
+    local backup_path_def="/home/${CURRENT_USER}/backups/docker-volume-backups"
+    local restore_path_def="/home/${CURRENT_USER}/backups/docker-volume-restore-dir"
     local log_dir_def="/home/${CURRENT_USER}/logs/docker_tool_suite"
     local log_retention_def="30"
     
-    echo -e "${C_YELLOW}--- Path Settings ---${C_RESET}"
+    echo -e "-----------------------------------------------------\n"
+    echo -e "${C_YELLOW}--- Configure Path Settings ---${C_RESET}\n"
+    echo -e "${C_GRAY}Leave the defualt paths or enter your own. \n${C_RESET}"
     read -p "Base Compose Apps Path [${C_GREEN}${apps_path_def}${C_RESET}]: " apps_path; APPS_BASE_PATH=${apps_path:-$apps_path_def}
     read -p "Managed Apps Subdirectory [${C_GREEN}${managed_subdir_def}${C_RESET}]: " managed_subdir; MANAGED_SUBDIR=${managed_subdir:-$managed_subdir_def}
     read -p "Default Backup Location [${C_GREEN}${backup_path_def}${C_RESET}]: " backup_loc; BACKUP_LOCATION=${backup_loc:-$backup_path_def}
@@ -337,8 +339,6 @@ initial_setup() {
     done
     read -p "Default RAR Compression Level (0-5) [${C_GREEN}3${C_RESET}]: " rar_level
     RAR_COMPRESSION_LEVEL=${rar_level:-3}
-    read -p "Delete original backup folder after creating RAR archive? (y/N): " rar_delete_src
-    RAR_DELETE_SOURCE_AFTER=$([[ "${rar_delete_src,,}" =~ ^(y|Y|yes|YES)$ ]] && echo "true" || echo "false")
 
     clear
     echo -e "\n${C_GREEN}_--| Docker Tool Suite ${SCRIPT_VERSION} Setup |---_${C_RESET}\n"
@@ -351,7 +351,6 @@ initial_setup() {
     echo -e "    Restore Path:    ${C_GREEN}${RESTORE_LOCATION}${C_RESET}"
     echo "  Archive Settings:"
     echo -e "    RAR Level:       ${C_GREEN}${RAR_COMPRESSION_LEVEL}${C_RESET}"
-    echo -e "    Delete Source:   ${C_GREEN}${RAR_DELETE_SOURCE_AFTER}${C_RESET}"
     echo "  General:"
     echo -e "    Log Path:        ${C_GREEN}${LOG_DIR}${C_RESET}"
     echo -e "    Log Retention:   ${C_GREEN}${LOG_RETENTION_DAYS} days${C_RESET}\n"
@@ -361,22 +360,27 @@ initial_setup() {
 
     echo -e "\n${C_GREEN}Saving configuration...${C_RESET}"; mkdir -p "${CONFIG_DIR}"
     {
-        echo "# --- Unified Configuration for Docker Tool Suite ${SCRIPT_VERSION} ---"
+        echo "# ============================================="
+        echo "#  Unified Configuration for Docker Tool Suite"
+        echo "# ============================================="
         echo
         echo "# --- App Manager ---"
-        printf "APPS_BASE_PATH=%q\n" "${APPS_BASE_PATH}"
-        printf "MANAGED_SUBDIR=%q\n" "${MANAGED_SUBDIR}"
+        # Using double quotes for path variables as requested, which also handles spaces.
+        printf "APPS_BASE_PATH=\"%s\"\n" "${APPS_BASE_PATH}"
+        printf "MANAGED_SUBDIR=\"%s\"\n" "${MANAGED_SUBDIR}"
         echo
         echo "# --- Volume Manager ---"
-        printf "BACKUP_LOCATION=%q\n" "${BACKUP_LOCATION}"
-        printf "RESTORE_LOCATION=%q\n" "${RESTORE_LOCATION}"
+        printf "BACKUP_LOCATION=\"%s\"\n" "${BACKUP_LOCATION}"
+        printf "RESTORE_LOCATION=\"%s\"\n" "${RESTORE_LOCATION}"
         echo "BACKUP_IMAGE=\"docker/alpine-tar-zstd:latest\""
+        echo
         echo "# List of volumes to ignore during backup."
         echo -n "IGNORED_VOLUMES=("
         if [ ${#selected_ignored_volumes[@]} -gt 0 ]; then
             printf "\n"; for vol in "${selected_ignored_volumes[@]}"; do echo "    \"$vol\""; done
         else
             printf "\n"; echo "    \"example-of-ignored_volume-1\""
+            printf "\n"; echo "    \"example-of-ignored_volume-2\""
         fi
         echo ")"
         echo
@@ -385,7 +389,8 @@ initial_setup() {
         if [ ${#selected_ignored_images[@]} -gt 0 ]; then
             printf "\n"; for img in "${selected_ignored_images[@]}"; do echo "    \"$img\""; done
         else
-            printf "\n"; echo "    \"custom-registry/my-custom-app:latest\""
+            printf "\n"; echo "    \"custom-registry/my-custom-app-1:latest\""
+            printf "\n"; echo "    \"custom-registry/my-custom-app-2:latest\""
         fi
         echo ")"
         echo
@@ -393,12 +398,11 @@ initial_setup() {
         echo "# RAR Password is encrypted using a machine-specific key."
         printf "ENCRYPTED_RAR_PASSWORD=%q\n" "${ENCRYPTED_RAR_PASSWORD}"
         echo "RAR_COMPRESSION_LEVEL=${RAR_COMPRESSION_LEVEL}"
-        echo "RAR_DELETE_SOURCE_AFTER=${RAR_DELETE_SOURCE_AFTER}"
         echo
         echo "# --- General ---"
-        printf "LOG_DIR=%q\n" "${LOG_DIR}"
+        printf "LOG_DIR=\"%s\"\n" "${LOG_DIR}"
         echo "# Log file retention period in days. Set to 0 to disable automatic pruning."
-        printf "LOG_RETENTION_DAYS=%q\n" "${LOG_RETENTION_DAYS}"
+        printf "LOG_RETENTION_DAYS=%s\n" "${LOG_RETENTION_DAYS}"
     } > "${CONFIG_FILE}"
 
     echo -e "${C_YELLOW}Creating directories and setting permissions...${C_RESET}"
@@ -1271,15 +1275,13 @@ volume_smart_backup_main() {
     rm "$rar_log"
 
     if $rar_success; then
-        echo -e "${C_GREEN}${TICKMARK} Secure archive created successfully.${C_RESET}"
-        $SUDO_CMD chown "${CURRENT_USER}:${CURRENT_USER}" "${archive_path%.rar}"*.rar
-
-        # Simplified logic for deleting the source folder
-        local should_delete_source=${RAR_DELETE_SOURCE_AFTER:-false}
-        local prompt_opts=$([[ "$should_delete_source" == "true" ]] && echo "Y/n" || echo "y/N")
-        read -p "Delete the original backup folder ('$(basename "$backup_dir")')? [${prompt_opts}]: " confirm_del
-        local final_decision=false; if [[ "${confirm_del,,}" == "y" ]] || [[ -z "$confirm_del" && "$should_delete_source" == "true" ]]; then final_decision=true; fi
-        if $final_decision; then echo -e "${C_YELLOW}Deleting source folder...${C_RESET}"; rm -rf "${backup_dir}"; echo -e "${C_GREEN}Source folder deleted.${C_RESET}"; else echo -e "${C_YELLOW}Original backup folder kept.${C_RESET}"; fi
+        read -p $'\n'"RAR archive created. Do you wan to delete the original backup folder [${backup_dir}]? (y/N): " delete_source
+        if [[ "${delete_source,,}" =~ ^(y|Y|yes|YES)$ ]]; then
+            log "User chose to delete source folder. Deleting: $backup_dir" "   -> Deleting original backup source folder..."
+            execute_and_log $SUDO_CMD rm -rf "${backup_dir}"; echo -e "${C_GREEN}Source folder deleted.${C_RESET}";
+        else
+            echo -e "${C_YELLOW}Original backup folder kept.${C_RESET}";
+        fi
     else
         echo -e "${C_BOLD_RED}Error: Failed to create RAR archive. Check logs for details.${C_RESET}"
     fi
@@ -1815,15 +1817,9 @@ settings_manager_menu() {
                 ;;
             4) # Archive Settings
                 clear; echo -e "${C_YELLOW}--- Archive Settings ---${C_RESET}"
+                
                 update_secure_archive_settings
                 _update_config_value "RAR_COMPRESSION_LEVEL" "Default RAR Compression Level (0-5)" "${RAR_COMPRESSION_LEVEL:-3}"
-                
-                local current_delete_val=${RAR_DELETE_SOURCE_AFTER:-false}
-                read -p "Delete original backup folder after archiving? (y/N) [Current: ${C_GREEN}${current_delete_val}${C_RESET}]: " rar_delete
-                local new_val=$([[ "${rar_delete,,}" =~ ^(y|Y|yes|YES)$ ]] && echo "true" || echo "false")
-                sed -i "/^RAR_DELETE_SOURCE_AFTER=/c\RAR_DELETE_SOURCE_AFTER=${new_val}" "$CONFIG_FILE"
-                source "$CONFIG_FILE"
-                echo -e "${C_GREEN}${TICKMARK} Setting 'RAR_DELETE_SOURCE_AFTER' updated.${C_RESET}"
 
                 echo -e "\n${C_BLUE}Archive settings updated. Press Enter...${C_RESET}"; read -r
                 ;;
