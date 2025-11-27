@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # ======================================================================================
 
-SCRIPT_VERSION=v1.4.3.2
+SCRIPT_VERSION=v1.4.4
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -240,7 +240,7 @@ show_selection_menu() {
             if ${selected_status_ref[$i]}; then echo -e " $((i+1)). ${C_GREEN}[x]${C_RESET} ${all_items_ref[$i]}"; else echo -e " $((i+1)). ${C_RED}[ ]${C_RESET} ${all_items_ref[$i]}"; fi
         done
         echo "-----------------------------------------------------"
-        echo "Enter a (${C_GREEN}No.${C_RESET}) to toggle, ${C_BLUE}(a)ll${C_RESET}, ${C_YELLOW}(${action_verb}) ${C_RESET}to ${C_YELLOW}${action_verb}${C_RESET}, ${C_GRAY}(r)eturn ${C_RESET}or ${C_RED}(q)uit${C_RESET}."
+        echo -e "Enter a (${C_GREEN}No.${C_RESET}) to toggle, ${C_BLUE}(a)ll${C_RESET}, ${C_YELLOW}(${action_verb}) ${C_RESET}to ${C_YELLOW}${action_verb}${C_RESET}, ${C_GRAY}(r)eturn ${C_RESET}or ${C_RED}(q)uit${C_RESET}."
         read -rp "Your choice: " choice
         case "$choice" in
             "${action_verb}")
@@ -305,8 +305,18 @@ initial_setup() {
     read -p "Default Backup Location [${C_GREEN}${backup_path_def}${C_RESET}]: " backup_loc; BACKUP_LOCATION=${backup_loc:-$backup_path_def}
     read -p "Default Restore Location [${C_GREEN}${restore_path_def}${C_RESET}]: " restore_loc; RESTORE_LOCATION=${restore_loc:-$restore_path_def}
     read -p "Log Directory Path [${C_GREEN}${log_dir_def}${C_RESET}]: " log_dir; LOG_DIR=${log_dir:-$log_dir_def}
-    read -p "Log file retention period (days, 0 to disable) [${C_GREEN}${log_retention_def}${C_RESET}]: " log_retention; LOG_RETENTION_DAYS=${log_retention:-$log_retention_def} # New setting
+    read -p "Log file retention period (days, 0 to disable) [${C_GREEN}${log_retention_def}${C_RESET}]: " log_retention; LOG_RETENTION_DAYS=${log_retention:-$log_retention_def}
     
+    echo -e "\n${C_YELLOW}--- Configure Helper Images ---${C_RESET}"
+    local backup_image_def="docker/alpine-tar-zstd:latest"
+    local explore_image_def="debian:trixie-slim"
+    
+    read -p "Backup Helper Image [${C_GREEN}${backup_image_def}${C_RESET}]: " bk_img
+    BACKUP_IMAGE=${bk_img:-$backup_image_def}
+    
+    read -p "Volume Explorer Image [${C_GREEN}${explore_image_def}${C_RESET}]: " exp_img
+    EXPLORE_IMAGE=${exp_img:-$explore_image_def}
+
     local -a selected_ignored_volumes=()
     read -p $'\n'"Do you want to configure ignored volumes now? (y/N): " config_vols
     if [[ "${config_vols,,}" =~ ^(y|Y|yes|YES)$ ]]; then
@@ -323,21 +333,35 @@ initial_setup() {
 
     echo -e "\n${C_YELLOW}--- Secure Archive Settings (Optional) ---${C_RESET}"
     local rar_pass_1 rar_pass_2 ENCRYPTED_RAR_PASSWORD=""
+
     while true; do
-        read -sp "Enter a default password for RAR archives (leave blank for none): " rar_pass_1; echo
-        # If the user leaves the first password blank, skip confirmation.
+        echo -e "${C_GRAY}This password will be used to encrypt RAR backups by default.${C_RESET}"
+        read -sp "Enter a default password (leave blank for none): " rar_pass_1; echo
+
         if [[ -z "$rar_pass_1" ]]; then
-            break
+            # Added Check: Ask for confirmation if they really meant no password
+            read -p "${C_YELLOW}You left the password blank. Disable default encryption? (Y/n): ${C_RESET}" confirm_no_pass
+            if [[ "${confirm_no_pass:-y}" =~ ^[Yy]$ ]]; then
+                echo -e "${C_GREEN}-> Default encryption disabled.${C_RESET}"
+                ENCRYPTED_RAR_PASSWORD=""
+                break
+            else
+                echo -e "${C_BLUE}-> Please enter a password then.${C_RESET}"
+                continue
+            fi
         fi
+
         read -sp "Confirm password: " rar_pass_2; echo
 
         if [[ "$rar_pass_1" == "$rar_pass_2" ]]; then
             ENCRYPTED_RAR_PASSWORD=$(encrypt_pass "${rar_pass_1}")
+            echo -e "${C_GREEN}-> Password saved and encrypted.${C_RESET}"
             break
         else
             echo -e "${C_RED}Passwords do not match. Please try again.${C_RESET}"
         fi
     done
+
     read -p "Default RAR Compression Level (0-5) [${C_GREEN}3${C_RESET}]: " rar_level
     RAR_COMPRESSION_LEVEL=${rar_level:-3}
 
@@ -373,7 +397,12 @@ initial_setup() {
         echo "# --- Volume Manager ---"
         printf "BACKUP_LOCATION=\"%s\"\n" "${BACKUP_LOCATION}"
         printf "RESTORE_LOCATION=\"%s\"\n" "${RESTORE_LOCATION}"
-        echo "BACKUP_IMAGE=\"docker/alpine-tar-zstd:latest\""
+
+        echo "# Image used for backup/restore operations (must have tar and zstd)"
+        printf "BACKUP_IMAGE=\"%s\"\n" "${BACKUP_IMAGE}"
+        echo "# Image used for the interactive shell explorer"
+        printf "EXPLORE_IMAGE=\"%s\"\n" "${EXPLORE_IMAGE}"
+
         echo
         echo "# List of volumes to ignore during backup."
         echo -n "IGNORED_VOLUMES=("
@@ -566,7 +595,7 @@ _update_app_task() {
                 local id_before
                 id_before=$($SUDO_CMD docker inspect --format='{{.Id}}' "$image" 2>/dev/null || echo "not_found")
 
-                # --- NEW: Record History ---
+                # --- Record History ---
                 _record_image_state "$app_dir" "$image" "$id_before"
                 # ---------------------------
 
@@ -939,7 +968,7 @@ app_manager_menu() {
             2) app_manager_interactive_handler "Essential" "$APPS_BASE_PATH" "$APPS_BASE_PATH" ;;
             3) app_manager_interactive_handler "Managed" "$APPS_BASE_PATH/$MANAGED_SUBDIR" "$APPS_BASE_PATH/$MANAGED_SUBDIR" ;;
             4) 
-                read -r -p "$(printf "\n${C_BOLD_RED}This will stop ALL running compose applications. Are you sure? [y/N]: ${C_RESET}")" confirm
+                read -rp "$(printf "\n${C_BOLD_RED}This will stop ALL running compose applications. Are you sure? [y/N]: ${C_RESET}")" confirm
                 if [[ "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then
                     app_manager_stop_all
                 else
@@ -968,6 +997,19 @@ ensure_backup_image() {
     log "Backup image OK." "-> Image OK.\n"
 }
 
+ensure_explore_image() {
+    log "Checking for explorer image: ${EXPLORE_IMAGE}" "-> Checking for Explorer image: ${C_BLUE}${EXPLORE_IMAGE}${C_RESET}..."
+    if ! $SUDO_CMD docker image inspect "${EXPLORE_IMAGE}" &>/dev/null; then
+        log "Explorer image not found, pulling..." "   -> Image not found locally. Pulling..."
+        if ! execute_and_log $SUDO_CMD docker pull "${EXPLORE_IMAGE}"; then 
+            log "ERROR: Failed to pull explorer image." "${C_RED}Error: Failed to pull ${EXPLORE_IMAGE}...${C_RESET}"
+            return 1
+        fi
+    fi
+    log "Explorer image OK." "-> Image OK.\n"
+    return 0
+}
+
 run_in_volume() { local volume_name="$1"; shift; $SUDO_CMD docker run --rm -v "${volume_name}:/volume:ro" "${BACKUP_IMAGE}" "$@"; }
 
 volume_checker_inspect() {
@@ -987,14 +1029,32 @@ volume_checker_calculate_size() {
 
 volume_checker_explore() {
     local volume_name="$1"
-    echo -e "\n${C_BLUE}--- Interactive Shell for '${volume_name}' ---${C_RESET}"
-    echo -e "${C_YELLOW}The volume is mounted read-write at /volume.\nType 'exit' or press Ctrl+D to return.${C_RESET}"
-    $SUDO_CMD docker run --rm -it -v "${volume_name}:/volume" -w /volume "${BACKUP_IMAGE}" sh
+    #  Ensures image exists before starting
+    if ! ensure_explore_image; then return; fi
+
+    clear
+    echo -e "${C_RESET}=============================================="
+    echo -e "          ${C_GREEN}Docker Tool Suite ${SCRIPT_VERSION}"
+    echo -e "${C_RESET}=============================================="
+    echo -e "${C_BLUE}           --- Interactive Shell ---${C_RESET}"
+    echo -e "${C_RESET}----------------------------------------------\n"
+    echo -e "${C_YELLOW}The volume ${C_BLUE}${volume_name} ${C_YELLOW}is mounted read-write at ${C_BLUE}/volume${C_YELLOW}."
+    echo -e "${C_YELLOW}Type ${C_GREEN}'exit' ${C_YELLOW}or press ${C_GREEN}Ctrl+D ${C_YELLOW}to return.${C_RESET}\n"
+
+    $SUDO_CMD docker run --rm -it \
+        -e TERM="$TERM" \
+        -v "${volume_name}:/volume" \
+        -v /etc/localtime:/etc/localtime:ro \
+        -w /volume \
+        "${EXPLORE_IMAGE}" \
+        bash -c "echo -e \"alias ll='ls -lah --color=auto'\" >> ~/.bashrc; \
+                 echo -e \"export PS1='${C_RESET}[${C_GREEN}VOLUME-EXPLORER${C_RESET}@${C_BLUE}${volume_name}${C_RESET}:${C_GREEN}\w${C_RESET}] ${C_GREEN}# ${C_RESET}'\" >> ~/.bashrc; \
+                 exec bash" || true
 }
 
 volume_checker_remove() {
     local volume_name="$1"
-    read -r -p "$(printf "\n${C_YELLOW}Permanently delete volume '${C_BLUE}%s${C_YELLOW}'? [y/N]: ${C_RESET}" "${volume_name}")" confirm
+    read -rp "$(printf "\n${C_YELLOW}Permanently delete volume '${C_BLUE}%s${C_YELLOW}'? [y/N]: ${C_RESET}" "${volume_name}")" confirm
     if [[ "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then
         echo -e "-> Deleting volume '${volume_name}'..."
         if execute_and_log $SUDO_CMD docker volume rm "${volume_name}"; then echo -e "${C_GREEN}Volume successfully deleted.${C_RESET}"; sleep 2; return 0; else echo -e "${C_RED}Error: Failed to delete. It might be in use.${C_RESET}"; sleep 3; return 1; fi
@@ -1040,9 +1100,9 @@ volume_checker_main() {
     while true; do
         clear
         echo -e "${C_RESET}=============================================="
-        echo -e " ${C_GREEN}Docker Tool Suite ${SCRIPT_VERSION}"
+        echo -e "          ${C_GREEN}Docker Tool Suite ${SCRIPT_VERSION}"
         echo -e "${C_RESET}=============================================="
-        echo -e "${C_BLUE}--- Inspect & Manage Volumes ---"
+        echo -e "           ${C_BLUE}--- Inspect & Manage Volumes ---"
         echo -e "${C_RESET}----------------------------------------------\n"
         mapfile -t volumes < <($SUDO_CMD docker volume ls --format "{{.Name}}")
         if [ ${#volumes[@]} -eq 0 ]; then echo -e "${C_RED}No Docker volumes found.${C_RESET}"; sleep 2; return; fi
@@ -1098,19 +1158,14 @@ volume_smart_backup_main() {
 
     for volume in "${selected_volumes[@]}"; do
         local container_id
-        # Find a RUNNING container using this volume. We only need one to identify the project.
         container_id=$($SUDO_CMD docker ps -q --filter "volume=${volume}" | head -n 1)
 
         if [[ -n "$container_id" ]]; then
-            # Found a container, now get its compose project name from its labels.
             local project_name
             project_name=$($SUDO_CMD docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$container_id")
 
             if [[ -n "$project_name" ]]; then
-                # This is a compose volume, group it with its project.
                 app_volumes_map["$project_name"]+="${volume} "
-
-                # Find and store the project's directory only once.
                 if [[ ! -v "app_dir_map[$project_name]" ]]; then
                     echo " -> Found application for volume '${volume}': ${C_BLUE}${project_name}${C_RESET}"
                     local found_dir
@@ -1118,53 +1173,43 @@ volume_smart_backup_main() {
                     if [[ -n "$found_dir" ]]; then
                         app_dir_map["$project_name"]="$found_dir"
                     else
-                        log "ERROR: Could not find directory for project '$project_name'. Its volumes will be backed up, but the app will not be stopped."
-                        # This is a fallback: we can't stop the app, so we treat its volumes as standalone to ensure they are still backed up.
+                        log "ERROR: Could not find directory for project '$project_name'. Treating as standalone."
                         standalone_volumes+=("$volume")
-                        unset 'app_volumes_map["$project_name"]' # Remove from app map
-                        continue # Go to the next volume
+                        unset 'app_volumes_map["$project_name"]'
+                        continue
                     fi
                 fi
             else
-                # The container using the volume is not part of a compose project.
-                echo -e " -> Volume '${C_BLUE}${volume}${C_RESET}' is used by a non-compose container. Backing up as standalone."
+                echo -e " -> Volume '${C_BLUE}${volume}${C_RESET}' is non-compose. Backing up as standalone."
                 standalone_volumes+=("$volume")
             fi
         else
-            # No running container is using this volume.
-            echo -e " -> Volume '${C_BLUE}${volume}${C_RESET}' is standalone (app may be stopped or it's not a compose volume)."
+            echo -e " -> Volume '${C_BLUE}${volume}${C_RESET}' is standalone."
             standalone_volumes+=("$volume")
         fi
     done
 
     local backup_dir="${BACKUP_LOCATION%/}/$(date +'%Y-%m-%d_%H-%M-%S')"; mkdir -p "$backup_dir"
 
-    # --- Phase 2: Process backups on a per-app basis ---
+    # --- Phase 2: Process App Backups ---
     if [ -n "${!app_volumes_map[*]}" ]; then
         echo -e "\n${C_GREEN}--- Processing Application-Linked Backups ---${C_RESET}"
         for app_name in "${!app_volumes_map[@]}"; do
             echo -e "\n${C_YELLOW}Processing app: ${C_BLUE}${app_name}${C_RESET}"
-            
             local app_dir=${app_dir_map[$app_name]}
-            
-            # 1. Stop the app
             _stop_app_task "$app_name" "$app_dir"
-            
-            # 2. Backup its volumes
             local -a vols_to_backup; read -r -a vols_to_backup <<< "${app_volumes_map[$app_name]}"
-            echo "   -> Backing up ${#vols_to_backup[@]} volume(s) for this app..."
+            echo "   -> Backing up ${#vols_to_backup[@]} volume(s)..."
             for volume in "${vols_to_backup[@]}"; do
                 echo "      - Backing up ${C_BLUE}${volume}${C_RESET}..."
                 execute_and_log $SUDO_CMD docker run --rm -v "${volume}:/volume:ro" -v "${backup_dir}:/backup" "${BACKUP_IMAGE}" tar -C /volume --zstd -cvf "/backup/${volume}.tar.zst" .
             done
-
-            # 3. Start the app
             _start_app_task "$app_name" "$app_dir"
             echo -e "${C_GREEN}Finished processing ${app_name}.${C_RESET}"
         done
     fi
 
-    # --- Phase 3: Process standalone volumes ---
+    # --- Phase 3: Process Standalone Backups ---
     if [[ ${#standalone_volumes[@]} -gt 0 ]]; then
         echo -e "\n${C_GREEN}--- Processing Standalone Volume Backups ---${C_RESET}"
         for volume in "${standalone_volumes[@]}"; do
@@ -1173,52 +1218,61 @@ volume_smart_backup_main() {
         done
     fi
 
-    echo -e "\n${C_YELLOW}Changing ownership of all backup files to user '${CURRENT_USER}'...${C_RESET}"
+    echo -e "\n${C_YELLOW}Changing ownership to '${CURRENT_USER}'...${C_RESET}"
     $SUDO_CMD chown -R "${CURRENT_USER}:${CURRENT_USER}" "$backup_dir"
-    echo -e "\n${C_GREEN}${TICKMARK} All backup tasks completed successfully!${C_RESET}"
+    echo -e "\n${C_GREEN}${TICKMARK} Backup tasks completed successfully!${C_RESET}"
 
     # --- Phase 4: Create Secure RAR Archive ---
-    read -p $'\n'"${C_BLUE}Do you want to create a password-protected RAR archive of this backup? (Y/N): " create_rar
-    if [[ ! "${create_rar:-y}" =~ ^[Yy]$ ]]; then
-        echo -e "${C_YELLOW}Skipping RAR archive creation.${C_RESET}"; return
-    fi
+    local create_rar=""
+    while true; do
+        read -p $'\n'"${C_BLUE}Do you want to create a password-protected RAR archive of this backup? (Y/N): ${C_RESET}" create_rar
+        case "${create_rar,,}" in
+            y|Y|yes|YES) break ;;
+            n|N|no|NO)  echo -e "${C_YELLOW}Skipping RAR archive creation.${C_RESET}"; return ;;
+            *)     echo -e "${C_RED}Invalid input. Please enter Y/YES or N/NO.${C_RESET}" ;;
+        esac
+    done
+
     if ! command -v rar &>/dev/null; then echo -e "\n${C_BOLD_RED}Error: 'rar' command not found. Cannot create archive.${C_RESET}"; return 1; fi
     
     local archive_password=""
     local password_is_set=false
 
+    # --- Password Selection Loop ---
     if [[ -n "${ENCRYPTED_RAR_PASSWORD-}" ]]; then
-        echo -e "\n${C_BLUE}A default archive password is configured.${C_RESET}\n"
-        read -p "${C_RESET}Choose an option: ${C_BLUE}(U)se saved${C_RESET}, ${C_YELLOW}(E)nter new${C_RESET}, ${C_GRAY}(N)o password${C_RESET}, ${C_RED}(C)ancel: " pass_choice
-        case "${pass_choice,,}" in
-            u|use|"")
-                archive_password=$(decrypt_pass "${ENCRYPTED_RAR_PASSWORD}")
-                if [[ -z "$archive_password" ]]; then
-                    echo -e "${C_BOLD_RED}Error: Failed to decrypt the stored RAR password.${C_RESET}"
-                    echo -e "${C_YELLOW}Please enter the password manually.${C_RESET}"
-                else
-                    echo -e "${C_BLUE}Using the stored password.${C_RESET}"
+        echo -e "\n${C_BLUE}A default archive password is configured.${C_RESET}"
+        while true; do
+            read -p "Choose: ${C_BLUE}(U)se saved${C_RESET}, ${C_YELLOW}(E)nter new${C_RESET}, ${C_GRAY}(N)o password${C_RESET}, ${C_RED}(C)ancel${C_RESET}: " pass_choice
+            case "${pass_choice,,}" in
+                u|U|use|USE)
+                    archive_password=$(decrypt_pass "${ENCRYPTED_RAR_PASSWORD}")
+                    if [[ -z "$archive_password" ]]; then
+                        echo -e "${C_BOLD_RED}Error: Decryption failed. Please enter manually.${C_RESET}"
+                    else
+                        echo -e "${C_BLUE}Using saved password.${C_RESET}"
+                        password_is_set=true
+                    fi
+                    break
+                    ;;
+                e|E|enter|ENTER)
+                    echo -e "${C_YELLOW}-> Enter a session-specific password.${C_RESET}"
+                    break
+                    ;;
+                n|N|no|NO)
+                    echo -e "${C_YELLOW}Creating archive with NO password.${C_RESET}"
+                    archive_password=""
                     password_is_set=true
-                fi
-                ;;
-            e|enter)
-                echo -e "${C_YELLOW}-> You chose to enter a different password for this backup session.${C_RESET}"
-                ;; # Fall through to the manual entry block
-            n|no)
-                echo -e "${C_YELLOW}Creating archive with no password.${C_RESET}"
-                archive_password=""
-                password_is_set=true
-                ;;
-            c|cancel)
-                echo -e "${C_RED}Archive creation canceled by user.${C_RESET}"; return
-                ;;
-            *)
-                echo -e "${C_RED}Invalid choice. Canceling archive creation.${C_RESET}"; return
-                ;;
-        esac
+                    break
+                    ;;
+                c|C|cancel|CANCEL)
+                    echo -e "${C_RED}Archive creation canceled.${C_RESET}"; return ;;
+                *)
+                    echo -e "${C_RED}Invalid choice. Try again.${C_RESET}" ;;
+            esac
+        done
     fi
 
-    # If no decision has been made yet, prompt the user to enter a password.
+    # Manual Password Entry Loop
     if ! $password_is_set; then
         while true; do
             read -sp "Enter password for the archive (leave blank for none): " rar_pass_1; echo
@@ -1228,7 +1282,6 @@ volume_smart_backup_main() {
                 break
             fi
             read -sp "Confirm password: " rar_pass_2; echo
-
             if [[ "$rar_pass_1" == "$rar_pass_2" ]]; then
                 archive_password="${rar_pass_1}"
                 break
@@ -1237,60 +1290,142 @@ volume_smart_backup_main() {
             fi
         done
     fi
-    local archive_name="Apps-backup[$(date +'%d.%m.%Y')].rar"; local archive_path="$(dirname "$backup_dir")/${archive_name}"
-    local rar_split_opt=""; local total_size; total_size=$(du -sb "$backup_dir" | awk '{print $1}'); local eight_gb=$((8 * 1024 * 1024 * 1024))
-    if (( total_size > eight_gb )); then
-        read -p "Backup size is over 8GB. Split archive into 8GB parts? (Y/n): " confirm_split
-        if [[ "${confirm_split:-y}" =~ ^[Yy]$ ]]; then rar_split_opt="-v8g"; fi
-    fi
-    echo -e "\n${C_YELLOW}Creating secure RAR archive: ${C_GREEN}${archive_path}${C_RESET}"; echo -e "${C_GRAY}(This may take some time...)${C_RESET}"
+
+    local archive_name="Apps-backup[$(date +'%d.%m.%Y')].rar"
+    local archive_path="$(dirname "$backup_dir")/${archive_name}"
     
-    # --- Direct RAR execution to ensure password piping works reliably ---
-    # We bypass execute_and_log here because its I/O redirection can interfere with rar's -hp switch.
+    # Check for .rar OR .part1.rar (split archive)
+    if [[ -f "$archive_path" ]] || [[ -f "${archive_path%.rar}.part1.rar" ]]; then
+        archive_name="Apps-backup[$(date +'%d.%m.%Y_%H-%M-%S')].rar"
+        archive_path="$(dirname "$backup_dir")/${archive_name}"
+    fi
+
+    # --- Split Logic ---
+    local rar_split_opt=""
+    local total_size
+    total_size=$(du -sb "$backup_dir" | awk '{print $1}')
+    
+    echo -e "\n${C_YELLOW}Backup size is $(numfmt --to=iec-i --suffix=B "$total_size"). Select splitting option:${C_RESET}"
+    echo "  1) No splitting"
+    echo "  2) Split at 4GB (FAT32 compatible)"
+    echo "  3) Split at 8GB (DVD DL)"
+    echo "  4) Custom size (MB or GB)"
+    
+    while true; do
+        read -p "${C_YELLOW}Enter choice [${C_RESET}1${C_YELLOW}-${C_RESET}4${C_YELLOW}]: ${C_RESET}" split_choice
+        case "$split_choice" in
+            1) rar_split_opt=""; break ;;
+            # Note: 'm' and 'M' in standard RAR command mean different things.
+            # 'M' = 1,000,000 bytes (Decimal). 'm' = 1024*1024 bytes (Binary).
+            # We use 'm' here to match what the OS displays.
+            2) rar_split_opt="-v4095m"; echo -e "${C_BLUE}-> Splitting at 4GB (FAT32 safe).${C_RESET}"; break ;;
+            3) rar_split_opt="-v8192m"; echo -e "${C_BLUE}-> Splitting at 8GB.${C_RESET}"; break ;;
+            4) 
+                read -p "${C_YELLOW}Enter size (e.g., ${C_RESET}500m ${C_YELLOW}or ${C_RESET}2g${C_YELLOW}): ${C_RESET}" custom_size
+                if [[ "$custom_size" =~ ^[0-9]+[mMgG]$ ]]; then
+                    # Force unit to lowercase (m/g) so rar uses binary calculation (1024 multiplier)
+                    # This ensures '500m' results in 500 MiB (approx 524 MB decimal), 
+                    # which matches "500 MB" in Windows Explorer.
+                    local safe_size="${custom_size,,}"
+                    rar_split_opt="-v${safe_size}"
+                    echo -e "${C_BLUE}-> Splitting at ${C_GREEN}${safe_size}${C_BLUE} (Binary units).${C_RESET}"
+                    break
+                else
+                    echo -e "${C_RED}Invalid format. Use numbers followed by M or G.${C_RESET}"
+                fi
+                ;;
+            *) echo -e "${C_RED}Invalid option.${C_RESET}" ;;
+        esac
+    done
+
+    echo -e "\n${C_YELLOW}Creating secure RAR archive: ${C_GREEN}${archive_path}${C_RESET}"
+    echo -e "${C_GRAY}(Please wait, this may take time...)${C_RESET}"
+
     local rar_log; rar_log=$(mktemp)
     local rar_success=false
 
-    # Build the command array incrementally to avoid any ambiguity with word splitting,
-    # which can be a source of bugs in some shell environments.
     local rar_cmd=(rar a -ep1)
-    if [[ -n "$rar_split_opt" ]]; then
-        rar_cmd+=("$rar_split_opt")
-    fi
-    rar_cmd+=("-m${RAR_COMPRESSION_LEVEL:-3}")
-
-    # Using Locked archive
-    rar_cmd+=("-k")
+    [[ -n "$rar_split_opt" ]] && rar_cmd+=("$rar_split_opt")
+    # Added "-y" to assume Yes on all queries (prevents freezing on overwrite prompts)
+    rar_cmd+=("-m${RAR_COMPRESSION_LEVEL:-3}" "-k" "-y")
 
     if [[ -n "$archive_password" ]]; then
-        # With password: add the -hp (Encrypt both file data and headers) switch (read password from stdin) and pipe the password.
         rar_cmd+=("-hp")
         rar_cmd+=(-- "${archive_path}" "${backup_dir}")
         if printf '%s' "$archive_password" | "${rar_cmd[@]}" &> "$rar_log"; then
             rar_success=true
         fi
     else
-        # No password: just add file arguments and execute.
         rar_cmd+=(-- "${archive_path}" "${backup_dir}")
         if "${rar_cmd[@]}" &> "$rar_log"; then
             rar_success=true
         fi
     fi
 
-    # Display the output from the rar command and log it.
-    cat "$rar_log"
+    # --- Colorized Log Output ---
+    while IFS= read -r line; do
+        if [[ "$line" =~ (Done|OK|All OK) ]]; then
+            echo -e "${C_GREEN}${line}${C_RESET}"
+        elif [[ "$line" =~ (Adding|Updating|Creating) ]]; then
+            echo -e "${C_BLUE}${line}${C_RESET}"
+        elif [[ "$line" =~ (Error|WARNING|Cannot) ]]; then
+            echo -e "${C_BOLD_RED}${line}${C_RESET}"
+        elif [[ "$line" =~ [0-9]+% ]]; then
+            echo -e "${line//%/%${C_RESET}}" 
+        else
+            echo "$line"
+        fi
+    done < "$rar_log"
+
     cat "$rar_log" >> "${LOG_FILE:-/dev/null}"
     rm "$rar_log"
 
     if $rar_success; then
-        read -p $'\n'"RAR archive created. Do you wan to delete the original backup folder [${backup_dir}]? (y/N): " delete_source
-        if [[ "${delete_source,,}" =~ ^(y|Y|yes|YES)$ ]]; then
-            log "User chose to delete source folder. Deleting: $backup_dir" "   -> Deleting original backup source folder..."
-            execute_and_log $SUDO_CMD rm -rf "${backup_dir}"; echo -e "${C_GREEN}Source folder deleted.${C_RESET}";
-        else
-            echo -e "${C_YELLOW}Original backup folder kept.${C_RESET}";
+        echo -e "\n${C_GREEN}RAR archive created successfully.${C_RESET}\n"
+
+        # --- Handle Split Archives for Verification ---
+        local file_to_verify="$archive_path"
+        
+        # If the standard .rar doesn't exist, check for a .part1.rar (split archive)
+        if [[ ! -f "$file_to_verify" ]] && [[ -f "${archive_path%.rar}.part1.rar" ]]; then
+            file_to_verify="${archive_path%.rar}.part1.rar"
+            echo -e "${C_BLUE}Detected split archive. Verifying part 1 sequence...${C_RESET}"
         fi
+
+        # --- Verify the archive integrity ---
+        echo -e "${C_YELLOW}Verifying archive integrity...${C_RESET}"
+        local verify_cmd=(rar t)
+        [[ -n "$archive_password" ]] && verify_cmd+=("-p${archive_password}")
+
+        # Use the corrected filename here
+        verify_cmd+=("--" "$file_to_verify")
+        if "${verify_cmd[@]}" &>/dev/null; then
+             echo -e "${C_GREEN}Verification Passed: Archive is healthy.${C_RESET}\n"
+        else
+             echo -e "${C_BOLD_RED}Verification FAILED! Do not delete the source files.${C_RESET}\n"
+             # This prevents the delete prompt from appearing if verification fails
+             return 1
+        fi
+
+
+        while true; do
+            echo -e "${C_YELLOW}Do you want to delete the source backup folder?${C_RESET}"
+            echo -e "[${C_GREEN}${backup_dir}${C_RESET}]"
+            read -rp "(${C_RED}y${C_RESET}/${C_GREEN}N${C_RESET}): " delete_source
+            case "${delete_source,,}" in
+                y|Y|yes|YES)
+                    log "Deleting source folder: $backup_dir"
+                    execute_and_log $SUDO_CMD rm -rf "${backup_dir}"
+                    echo -e "\n${C_RED}Source folder deleted.${C_RESET}";
+                    break ;;
+                n|N|no|NO|"")
+                    echo -e "\n${C_YELLOW}Source backup folder kept.${C_RESET}";
+                    break ;;
+                *) echo -e "${C_RED}Please answer ${C_YELLOW}y${C_RED}/${C_YELLOW}YES ${C_RED}or ${C_GREEN}N${C_RED}/${C_GREEN}NO${C_RED}.${C_RESET}" ;;
+            esac
+        done
     else
-        echo -e "${C_BOLD_RED}Error: Failed to create RAR archive. Check logs for details.${C_RESET}"
+        echo -e "\n${C_BOLD_RED}Error: Failed to create RAR archive.${C_RESET}"
     fi
 }
 
@@ -1378,7 +1513,7 @@ system_prune_main() {
     echo "  - all dangling images"
     echo "  - all build cache"
     echo ""
-    read -r -p "$(printf "${C_BOLD_RED}This action is IRREVERSIBLE. Are you sure? [y/N]: ${C_RESET}")" confirm
+    read -rp "$(printf "${C_BOLD_RED}This action is IRREVERSIBLE. Are you sure? [y/N]: ${C_RESET}")" confirm
     if [[ "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then
         echo -e "\n${C_YELLOW}Pruning system...${C_RESET}"
         execute_and_log $SUDO_CMD docker system prune -af
@@ -1410,10 +1545,11 @@ _log_viewer_select_and_view() {
             echo -e "${C_YELLOW}No log files found to view.${C_RESET}"; sleep 2; return
         fi
 
+        clear
         echo -e "${C_RESET}=============================================="
-        echo -e " ${C_GREEN}Docker Tool Suite ${SCRIPT_VERSION}"
+        echo -e "          ${C_GREEN}Docker Tool Suite ${SCRIPT_VERSION}"
         echo -e "${C_RESET}=============================================="
-        echo -e "${C_BLUE}--- Log Viewer ---"
+        echo -e "           ${C_BLUE}--- Log Viewer ---"
         echo -e "${C_RESET}----------------------------------------------\n"
         echo -e "${C_YELLOW}Select a log file to view:${C_RESET}"
         
@@ -1772,7 +1908,6 @@ update_ignored_items() {
     local config_key="IGNORED_${item_type^^}"
     local temp_file; temp_file=$(mktemp)
 
-    # Using awk to safely remove the entire IGNORED_* block, which is more robust than sed.
     # It finds the start of the block (e.g., "IGNORED_VOLUMES=(") and ignores lines until
     # it finds the closing parenthesis, without relying on fragile comments.
     awk -v key="$config_key" '
@@ -1782,7 +1917,7 @@ update_ignored_items() {
     ' "$CONFIG_FILE" > "$temp_file"
     mv "$temp_file" "$CONFIG_FILE"
 
-    # Now, append the newly generated block safely to the end of the file.
+    # Appending the newly generated block safely to the end of the file.
     {
         echo "# List of ${item_type,,} to ignore during operations."
         echo -n "${config_key}=("
@@ -1801,6 +1936,7 @@ update_ignored_items() {
 settings_manager_menu() {
     local options=(
         "Change Path Settings"
+        "Change Helper Images"
         "Change Ignored Volumes"
         "Change Ignored Images"
         "Change Archive Settings"
@@ -1821,17 +1957,23 @@ settings_manager_menu() {
                 _update_config_value "LOG_DIR" "Log Directory Path" "$LOG_DIR"
                 echo -e "\n${C_BLUE}Path settings updated. Press Enter...${C_RESET}"; read -r
                 ;;
-            2) # Ignored Volumes
+            2) # Helper Images
+                clear; echo -e "${C_YELLOW}--- Helper Image Settings ---${C_RESET}"
+                _update_config_value "BACKUP_IMAGE" "Backup Helper Image" "$BACKUP_IMAGE"
+                _update_config_value "EXPLORE_IMAGE" "Volume Explorer Image" "$EXPLORE_IMAGE"
+                echo -e "\n${C_BLUE}Image settings updated. Press Enter...${C_RESET}"; read -r
+                ;;
+            3) # Ignored Volumes
                 local -a all_volumes; mapfile -t all_volumes < <($SUDO_CMD docker volume ls --format "{{.Name}}" | sort)
                 update_ignored_items "Volumes" "all_volumes" "IGNORED_VOLUMES"
                 echo -e "\nPress Enter to return..."; read -r
                 ;;
-            3) # Ignored Images
+            4) # Ignored Images
                 local -a all_images; mapfile -t all_images < <($SUDO_CMD docker image ls --format "{{.Repository}}:{{.Tag}}" | grep -v "<none>" | sort)
                 update_ignored_items "Images" "all_images" "IGNORED_IMAGES"
                 echo -e "\nPress Enter to return..."; read -r
                 ;;
-            4) # Archive Settings
+            5) # Archive Settings
                 clear; echo -e "${C_YELLOW}--- Archive Settings ---${C_RESET}"
                 
                 update_secure_archive_settings
@@ -1839,11 +1981,11 @@ settings_manager_menu() {
 
                 echo -e "\n${C_BLUE}Archive settings updated. Press Enter...${C_RESET}"; read -r
                 ;;
-            5) # Schedule Apps Updater
+            6) # Schedule Apps Updater
                 setup_cron_job
                 echo -e "\nPress Enter to return..."; read -r
                 ;;
-            6) # Schedule Unused Image Updater
+            7) # Schedule Unused Image Updater
                 setup_unused_images_cron_job
                 echo -e "\nPress Enter to return..."; read -r
                 ;;
