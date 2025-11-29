@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # ======================================================================================
 
-SCRIPT_VERSION=v1.4.4.1
+SCRIPT_VERSION=v1.4.5
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -145,6 +145,41 @@ _record_image_state() {
 }
 
 # --- check_root now authenticates on demand ---
+
+_enable_cron_logging() {
+    local subdir="$1"
+    local prefix="$2"
+    
+    # Define target paths
+    local target_dir="${LOG_DIR}/${subdir}"
+    local current_date=$(date +'%Y-%m-%d')
+    local new_log_file="${target_dir}/${prefix}-${current_date}.log"
+    
+    # Ensure directory exists
+    if [ ! -d "$target_dir" ]; then
+        mkdir -p "$target_dir"
+        # Fix folder ownership immediately
+        if [[ -n "${SUDO_USER-}" ]]; then
+            chown "${SUDO_USER}:${SUDO_USER}" "$target_dir"
+        fi
+    fi
+
+    # Update global LOG_FILE variable so internal log() function writes here too
+    LOG_FILE="$new_log_file"
+
+    # --- The Magic: Redirect all future output to the log file with timestamps ---
+    exec > >(while IFS= read -r line; do echo "[$(date +'%Y-%m-%d %H:%M:%S')] $line"; done >> "$new_log_file") 2>&1
+
+    # --- Permission Fix ---
+    # Since we are running as root (via cron), the file is created as root.
+    # We set a TRAP to change ownership back to the user when the script exits.
+    if [[ -n "${SUDO_USER-}" ]]; then
+        trap "chown '${SUDO_USER}:${SUDO_USER}' '$new_log_file'" EXIT
+    fi
+    
+    echo -e "${C_YELLOW} Cron logging enabled. Output redirected to: ${C_GREEN}$new_log_file ${C_RESET}"
+}
+
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         echo -e "${C_YELLOW}This action requires root privileges. Please enter your password.${C_RESET}"
@@ -293,7 +328,7 @@ initial_setup() {
     local apps_path_def="/home/${CURRENT_USER}/apps"
     local managed_subdir_def="managed_stacks"
     local backup_path_def="/home/${CURRENT_USER}/backups/docker-volume-backups"
-    local restore_path_def="/home/${CURRENT_USER}/backups/docker-volume-restore-dir"
+    local restore_path_def="/home/${CURRENT_USER}/backups/docker-volume-backups"
     local log_dir_def="/home/${CURRENT_USER}/logs/dtools"
     local log_retention_def="30"
     
@@ -302,11 +337,20 @@ initial_setup() {
     echo -e "${C_GRAY}Leave the defualt paths or enter your own. \n${C_RESET}"
     read -p "Base Compose Apps Path [${C_GREEN}${apps_path_def}${C_RESET}]: " apps_path; APPS_BASE_PATH=${apps_path:-$apps_path_def}
     read -p "Managed Apps Subdirectory [${C_GREEN}${managed_subdir_def}${C_RESET}]: " managed_subdir; MANAGED_SUBDIR=${managed_subdir:-$managed_subdir_def}
-    read -p "Default Backup Location [${C_GREEN}${backup_path_def}${C_RESET}]: " backup_loc; BACKUP_LOCATION=${backup_loc:-$backup_path_def}
-    read -p "Default Restore Location [${C_GREEN}${restore_path_def}${C_RESET}]: " restore_loc; RESTORE_LOCATION=${restore_loc:-$restore_path_def}
+    read -p "Volume Backup Location [${C_GREEN}${backup_path_def}${C_RESET}]: " backup_loc; BACKUP_LOCATION=${backup_loc:-$backup_path_def}
+    read -p "Volume Restore Location [${C_GREEN}${restore_path_def}${C_RESET}]: " restore_loc; RESTORE_LOCATION=${restore_loc:-$restore_path_def}
     read -p "Log Directory Path [${C_GREEN}${log_dir_def}${C_RESET}]: " log_dir; LOG_DIR=${log_dir:-$log_dir_def}
     read -p "Log file retention period (days, 0 to disable) [${C_GREEN}${log_retention_def}${C_RESET}]: " log_retention; LOG_RETENTION_DAYS=${log_retention:-$log_retention_def}
     
+    local log_sub_update_def="apps-update-logs"
+    local log_sub_unused_def="unused-images-update-logs"
+    
+    read -p "Subdirectory for App Update Logs [${C_GREEN}${log_sub_update_def}${C_RESET}]: " log_sub_update
+    LOG_SUBDIR_UPDATE=${log_sub_update:-$log_sub_update_def}
+    
+    read -p "Subdirectory for Unused Image Logs [${C_GREEN}${log_sub_unused_def}${C_RESET}]: " log_sub_unused
+    LOG_SUBDIR_UNUSED=${log_sub_unused:-$log_sub_unused_def}
+
     echo -e "\n${C_YELLOW}--- Configure Helper Images ---${C_RESET}"
     local backup_image_def="docker/alpine-tar-zstd:latest"
     local explore_image_def="debian:trixie-slim"
@@ -325,7 +369,7 @@ initial_setup() {
     fi
     
     local -a selected_ignored_images=()
-    read -p $'\n'"Do you want to configure ignored images now? (y/N): " config_imgs
+    read -p $'\n'"${C_YELLOW}Do you want to configure ignored images now? (${C_GREEN}y${C_YELLOW}/${C_RED}N${C_YELLOW})${C_RESET}: " config_imgs
     if [[ "${config_imgs,,}" =~ ^(y|Y|yes|YES)$ ]]; then
         mapfile -t all_images < <(docker image ls --format "{{.Repository}}:{{.Tag}}" | grep -v "<none>" | sort)
         interactive_list_builder "Select Images to IGNORE during updates" all_images selected_ignored_images
@@ -376,7 +420,7 @@ initial_setup() {
     echo -e "    Restore Path:    ${C_GREEN}${RESTORE_LOCATION}${C_RESET}"
     echo "  Archive Settings:"
     echo -e "    RAR Level:       ${C_GREEN}${RAR_COMPRESSION_LEVEL}${C_RESET}"
-    echo "  General:"
+    echo "  Logs:"
     echo -e "    Log Path:        ${C_GREEN}${LOG_DIR}${C_RESET}"
     echo -e "    Log Retention:   ${C_GREEN}${LOG_RETENTION_DAYS} days${C_RESET}\n"
     
@@ -397,12 +441,11 @@ initial_setup() {
         echo "# --- Volume Manager ---"
         printf "BACKUP_LOCATION=\"%s\"\n" "${BACKUP_LOCATION}"
         printf "RESTORE_LOCATION=\"%s\"\n" "${RESTORE_LOCATION}"
-
+        echo ""
         echo "# Image used for backup/restore operations (must have tar and zstd)"
         printf "BACKUP_IMAGE=\"%s\"\n" "${BACKUP_IMAGE}"
         echo "# Image used for the interactive shell explorer"
         printf "EXPLORE_IMAGE=\"%s\"\n" "${EXPLORE_IMAGE}"
-
         echo
         echo "# List of volumes to ignore during backup."
         echo -n "IGNORED_VOLUMES=("
@@ -429,8 +472,10 @@ initial_setup() {
         printf "ENCRYPTED_RAR_PASSWORD=%q\n" "${ENCRYPTED_RAR_PASSWORD}"
         echo "RAR_COMPRESSION_LEVEL=${RAR_COMPRESSION_LEVEL}"
         echo
-        echo "# --- General ---"
+        echo "# --- Logs ---"
         printf "LOG_DIR=\"%s\"\n" "${LOG_DIR}"
+        printf "LOG_SUBDIR_UPDATE=\"%s\"\n" "${LOG_SUBDIR_UPDATE}"
+        printf "LOG_SUBDIR_UNUSED=\"%s\"\n" "${LOG_SUBDIR_UNUSED}"
         echo "# Log file retention period in days. Set to 0 to disable automatic pruning."
         printf "LOG_RETENTION_DAYS=%s\n" "${LOG_RETENTION_DAYS}"
     } > "${CONFIG_FILE}"
@@ -493,7 +538,7 @@ setup_cron_job() {
     done
 
     echo -e "\n${C_YELLOW}Adding job to root's crontab...${C_RESET}"
-    local cron_command="$cron_schedule $SUDO_CMD $SCRIPT_PATH update --cron"
+    local cron_command="$cron_schedule $SUDO_CMD SUDO_USER=${CURRENT_USER} $SCRIPT_PATH update --cron"
     local cron_comment="# Added by Docker Tool Suite to update application images"
     
     local current_crontab; current_crontab=$(crontab -u "$cron_target_user" -l 2>/dev/null || true)
@@ -1800,7 +1845,7 @@ setup_unused_images_cron_job() {
     done
 
     echo -e "\n${C_YELLOW}Adding job to root's crontab...${C_RESET}"
-    local cron_command="$cron_schedule $SUDO_CMD $SCRIPT_PATH update-unused --cron"
+    local cron_command="$cron_schedule $SUDO_CMD SUDO_USER=${CURRENT_USER} $SCRIPT_PATH update-unused --cron"
     local cron_comment="# Added by Docker Tool Suite to update unused Docker images"
     
     local current_crontab; current_crontab=$(crontab -u "$cron_target_user" -l 2>/dev/null || true)
@@ -2031,7 +2076,9 @@ if [[ $# -gt 0 ]]; then
             shift
             if [[ "${1:-}" == "--cron" ]]; then
                 IS_CRON_RUN=true
-                # Check for a potential --dry-run flag after --cron, e.g., "update --cron --dry-run"
+                # Enable merged logging
+                _enable_cron_logging "${LOG_SUBDIR_UPDATE:-apps-update-logs}" "dtools-au"
+                
                 [[ "${2:-}" == "--dry-run" ]] && DRY_RUN=true
             else
                 [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=true
@@ -2039,13 +2086,16 @@ if [[ $# -gt 0 ]]; then
             app_manager_update_all_known_apps
             exit 0 ;;
         update-unused)
-            shift # Move past 'update-unused'
-            # Loop through remaining arguments
+            shift 
             while (( "$#" )); do
               case "$1" in
                 --dry-run) DRY_RUN=true; shift ;;
-                --cron) IS_CRON_RUN=true; shift ;;
-                *) echo "Unknown option for update-unused: $1"; exit 1 ;;
+                --cron) 
+                    IS_CRON_RUN=true
+                    # Enable merged logging
+                    _enable_cron_logging "${LOG_SUBDIR_UNUSED:-unused-images-update-logs}" "dtools-uil"
+                    shift ;;
+                *) echo "Unknown option: $1"; exit 1 ;;
               esac
             done
             update_unused_images_main
