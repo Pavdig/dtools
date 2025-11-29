@@ -1,21 +1,16 @@
 #!/bin/bash
-# ======================================================================================
+# =========================
 # --- Docker Tool Suite ---
-# ======================================================================================
+# =========================
 
-SCRIPT_VERSION=v1.4.8.6
+SCRIPT_VERSION=v1.4.8.7
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
 DRY_RUN=false
 IS_CRON_RUN=false
 
-# ======================================================================================
-# --- SECTION 1: SHARED FUNCTIONS & CONFIGURATION ---
-# ======================================================================================
-
 # --- Cosmetics ---
-# Source: https://gkarthiks.github.io/quick-commands-cheat-sheet/bash_command.html
 C_RED=$'\e[0;31m'
 C_LIGHT_RED=$'\e[1;31m'
 C_GREEN=$'\e[0;32m'
@@ -23,15 +18,15 @@ C_YELLOW=$'\e[1;33m'
 C_CYAN=$'\e[0;36m'
 C_GRAY=$'\e[90m'
 C_RESET=$'\e[0m'
-TICKMARK=$'\e[32m\xE2\x9C\x93' # GREEN ✓
+TICKMARK=$'\e[32m\xE2\x9C\x93'
 
 # --- Standardized Footer Options ---
-optionsRandQ=( # Options to Return and Quit
+optionsRandQ=(
         "${C_GRAY}(R)eturn to previous menu${C_RESET}"
         "${C_RED}(Q)uit the tool${C_RESET}"
 )
 
-optionsOnlyQ=( # Option for Main Menu (Quit only)
+optionsOnlyQ=(
         "${C_RED}(Q)uit the tool${C_RESET}"
 )
 
@@ -54,11 +49,10 @@ CONFIG_DIR="/home/${CURRENT_USER}/.config/dtools"
 CONFIG_FILE="${CONFIG_DIR}/config.conf"
 
 # --- SHARED UI FUNCTION ---
-# Usage: print_standard_menu "Title" array_reference "footer_mode(RQ|Q)"
 print_standard_menu() {
     local title="$1"
-    local -n _menu_options="$2" # uses nameref
-    local footer_mode="${3:-RQ}" # Default to Return & Quit
+    local -n _menu_options="$2"
+    local footer_mode="${3:-RQ}"
 
     clear
     echo -e "${C_RESET}=============================================="
@@ -66,14 +60,12 @@ print_standard_menu() {
     echo -e "${C_RESET}=============================================="
     
     echo -e " ${C_YELLOW}Options: "
-    # Loop through the passed options array
     for i in "${!_menu_options[@]}"; do
         echo -e " ${C_CYAN}$((i+1))${C_YELLOW}) ${C_RESET}${_menu_options[$i]}"
     done
     
     echo -e "${C_RESET}----------------------------------------------"
     
-    # Display Footer based on mode
     if [[ "$footer_mode" == "RQ" ]]; then
         for i in "${!optionsRandQ[@]}"; do echo -e " ${optionsRandQ[$i]}"; done
     elif [[ "$footer_mode" == "Q" ]]; then
@@ -83,15 +75,13 @@ print_standard_menu() {
     echo -e "${C_RESET}----------------------------------------------${C_RESET}"
 }
 
-# --- Encryption Helpers ---
+# --- Encryption ---
 get_secret_key() {
-    # Use a stable machine-specific ID for the encryption key.
     if [[ -r /etc/machine-id ]]; then
         cat /etc/machine-id
     elif [[ -r /var/lib/dbus/machine-id ]]; then
         cat /var/lib/dbus/machine-id
     else
-        # Fallback for systems without machine-id. This is less secure.
         log "Warning: machine-id not found. Using hostname as a fallback for encryption key."
         hostname
     fi
@@ -101,7 +91,6 @@ encrypt_pass() {
     local plaintext="$1"
     local key
     key=$(get_secret_key)
-    # Encrypt with AES-256, base64 encode, and remove newlines for single-line storage.
     printf '%s' "$plaintext" | openssl enc -aes-256-cbc -a -salt -pbkdf2 -pass pass:"$key" | tr -d '\n'
 }
 
@@ -109,8 +98,6 @@ decrypt_pass() {
     local encrypted_text="$1"
     local key
     key=$(get_secret_key)
-    # Decrypt the base64 encoded string. A newline is required for openssl to correctly process the piped base64 string.
-    # The '|| true' prevents the script from exiting on decryption failure (e.g., empty input or wrong key).
     printf '%s\n' "$encrypted_text" | openssl enc -aes-256-cbc -a -d -salt -pbkdf2 -pass pass:"$key" 2>/dev/null || true
 }
 
@@ -122,22 +109,18 @@ _record_image_state() {
 
     if [[ "$image_id" == "not_found" || -z "$image_id" ]]; then return; fi
 
-    # Format: Timestamp | Image Name | Image ID
     local entry="$(date +'%Y-%m-%d %H:%M:%S')|${image_name}|${image_id}"
     
-    # Check if the last entry is identical to avoid duplicates (e.g., repeated runs with no updates)
     local last_entry
     if [[ -f "$history_file" ]]; then
         last_entry=$(tail -n 1 "$history_file")
-        # Extract just the image and ID part to compare
         if [[ "${last_entry#*|}" == "${image_name}|${image_id}" ]]; then
-            return # Skip duplicate
+            return
         fi
     fi
 
     echo "$entry" >> "$history_file"
-    
-    # Keep file size manageable (keep last 50 entries)
+
     if [ $(wc -l < "$history_file") -gt 50 ]; then
         local temp_hist; temp_hist=$(mktemp)
         tail -n 50 "$history_file" > "$temp_hist"
@@ -145,39 +128,27 @@ _record_image_state() {
     fi
 }
 
-# --- check_root now authenticates on demand ---
-
 _enable_cron_logging() {
     local subdir="$1"
     local prefix="$2"
-    
-    # Define target paths
     local target_dir="${LOG_DIR}/${subdir}"
     local current_date=$(date +'%Y-%m-%d')
     local new_log_file="${target_dir}/${prefix}-${current_date}.log"
-    
-    # Ensure directory exists
+
     if [ ! -d "$target_dir" ]; then
         mkdir -p "$target_dir"
-        # Fix folder ownership immediately
         if [[ -n "${SUDO_USER-}" ]]; then
             chown "${SUDO_USER}:${SUDO_USER}" "$target_dir"
         fi
     fi
 
-    # Update global LOG_FILE variable so internal log() function writes here too
     LOG_FILE="$new_log_file"
 
-    # --- The Magic: Redirect all future output to the log file with timestamps ---
     exec > >(while IFS= read -r line; do echo "[$(date +'%Y-%m-%d %H:%M:%S')] $line"; done >> "$new_log_file") 2>&1
 
-    # --- Permission Fix ---
-    # Since we are running as root (via cron), the file is created as root.
-    # We set a TRAP to change ownership back to the user when the script exits.
     if [[ -n "${SUDO_USER-}" ]]; then
         trap "chown '${SUDO_USER}:${SUDO_USER}' '$new_log_file'" EXIT
     fi
-    
     echo -e "${C_YELLOW} Cron logging enabled. Output redirected to: ${C_GREEN}$new_log_file ${C_RESET}"
 }
 
@@ -199,9 +170,8 @@ log() {
 
 execute_and_log() {
     if $DRY_RUN; then
-        # Use printf for safer printing of arguments
         printf "${C_GRAY}[DRY RUN] Would execute: %q${C_RESET}\n" "$@"
-        return 0 # Assume success in dry run mode
+        return 0
     fi
 
     local tmp_log; tmp_log=$(mktemp)
@@ -216,7 +186,6 @@ execute_and_log() {
     sleep 0.1
     kill "$tail_pid" 2>/dev/null || true
 
-    # Only append to the main log file if not running from cron.
     if [[ "$IS_CRON_RUN" == "false" ]]; then
         cat "$tmp_log" >> "${LOG_FILE:-/dev/null}"
     fi
@@ -229,7 +198,7 @@ execute_and_log() {
 check_deps() {
     log "Checking dependencies..." "${C_GRAY}Checking dependencies...${C_RESET}"
     local error_found=false
-    # Use $SUDO_CMD
+
     if ! command -v docker &>/dev/null; then log "Error: Docker not found." "${C_RED}Error: Docker is not installed...${C_RESET}"; error_found=true; fi
     if ! $SUDO_CMD docker compose version &>/dev/null; then log "Error: Docker Compose V2 not found." "${C_RED}Error: Docker Compose V2 not available...${C_RESET}"; error_found=true; fi
     if ! command -v openssl &>/dev/null; then log "Error: openssl not found." "${C_RED}Error: 'openssl' is not installed (required for password encryption)...${C_RESET}"; error_found=true; fi
@@ -249,19 +218,17 @@ discover_apps() {
     local path="$1"; local -n app_array="$2"
     app_array=()
     if [ ! -d "$path" ]; then echo "Warning: Directory not found for discovery: $path" >> "${LOG_FILE:-/dev/null}"; return; fi
-    shopt -s nullglob # Prevent errors if no directories match
-    
-    # Note the trailing slash to match only directories
+    shopt -s nullglob
+
     for dir in "$path"/*/; do
         if [ -d "$dir" ]; then
-            # Check if a compose file exists before considering it an app
             if find_compose_file "${dir%/}" &>/dev/null; then
                 app_array+=("$(basename "$dir")")
             fi
         fi
     done
     
-    shopt -u nullglob # Reset globbing behavior
+    shopt -u nullglob
     IFS=$'\n' app_array=($(sort <<<"${app_array[*]}")); unset IFS
 }
 
@@ -317,7 +284,6 @@ interactive_list_builder() {
 }
 
 initial_setup() {
-    # This function must be run as root
     if [[ $EUID -ne 0 ]]; then echo -e "${C_RED}Initial setup must be run with 'sudo ./docker_tool_suite.sh'. Exiting.${C_RESET}"; exit 1; fi
     clear
     echo -e "${C_RESET}================================================"
@@ -384,7 +350,6 @@ initial_setup() {
         read -sp "Enter a default password (leave blank for none): " rar_pass_1; echo
 
         if [[ -z "$rar_pass_1" ]]; then
-            # Added Check: Ask for confirmation if they really meant no password
             read -p "${C_YELLOW}You left the password blank. Disable default encryption? (Y/n): ${C_RESET}" confirm_no_pass
             if [[ "${confirm_no_pass:-y}" =~ ^[Yy]$ ]]; then
                 echo -e "${C_GREEN}-> Default encryption disabled.${C_RESET}"
@@ -440,7 +405,6 @@ initial_setup() {
         echo "# ============================================="
         echo
         echo "# --- App Manager ---"
-        # Using double quotes for path variables as requested, which also handles spaces.
         printf "APPS_BASE_PATH=\"%s\"\n" "${APPS_BASE_PATH}"
         printf "MANAGED_SUBDIR=\"%s\"\n" "${MANAGED_SUBDIR}"
         echo
@@ -490,10 +454,7 @@ initial_setup() {
     mkdir -p "${APPS_BASE_PATH}/${MANAGED_SUBDIR}" "${BACKUP_LOCATION}" "${RESTORE_LOCATION}" "${LOG_DIR}"
     chown -R "${CURRENT_USER}:${CURRENT_USER}" "${CONFIG_DIR}" "${APPS_BASE_PATH}" "${BACKUP_LOCATION}" "${RESTORE_LOCATION}" "${LOG_DIR}"
 
-    # Call setup for App Updates
     setup_cron_job
-
-    # Call setup for Unused Image Updates
     setup_unused_images_cron_job
 
     echo -e "\n${C_GREEN}${TICKMARK} Setup complete! The script will now continue.${C_RESET}\n"; sleep 2
@@ -568,24 +529,17 @@ setup_cron_job() {
     fi
 }
 
-# ======================================================================================
-# --- SECTION 2: APPLICATION MANAGER MODULE ---
-# ======================================================================================
-
 _start_app_task() {
     local app_name="$1" app_dir="$2"
-    local extra_args="${3:-}" # Accept optional arguments
+    local extra_args="${3:-}"
 
     log "Starting $app_name..."
     local compose_file; compose_file=$(find_compose_file "$app_dir")
     if [ -z "$compose_file" ]; then log "Warning: No compose file for '$app_name'. Skipping." ""; return; fi
     
     log "Pulling images for '$app_name'..."
-    # We generally want to ensure images exist, but 'up' will do it too. 
-    # Explicit pull is safer for ensuring we have what we expect before starting.
     if execute_and_log $SUDO_CMD docker compose -f "$compose_file" pull; then
         log "Starting containers for '$app_name' (Args: ${extra_args:-none})..."
-        # Pass extra_args (like --force-recreate) to the command
         execute_and_log $SUDO_CMD docker compose -f "$compose_file" up -d $extra_args
         log "Successfully started '$app_name'."
     else
@@ -617,7 +571,6 @@ _update_app_task() {
         was_running=true
     fi
 
-    # --- Step 1: Image Pull & Update Detection ---
     log "Checking for images to update for '$app_name'..."
     mapfile -t all_app_images < <($SUDO_CMD docker compose -f "$compose_file" config --images 2>/dev/null)
     
@@ -645,23 +598,18 @@ _update_app_task() {
             echo -e "Pulling latest versions for non-ignored images in ${C_YELLOW}${app_name}${C_RESET}..."
             for image in "${images_to_pull[@]}"; do
                 log "Checking image: $image" "   -> Checking ${C_CYAN}${image}${C_RESET}..."
-                
-                # 1. Capture Image ID BEFORE
+
                 local id_before
                 id_before=$($SUDO_CMD docker inspect --format='{{.Id}}' "$image" 2>/dev/null || echo "not_found")
 
                 local id_after
                 
                 if $DRY_RUN; then
-                    # --- DRY RUN SAFETY ---
                     echo -e "      ${C_GRAY}[DRY RUN] Would pull: $image${C_RESET}"
-                    # We simulate 'no change' to avoid misleading 'Restarting...' messages in the log
                     id_after="$id_before"
                 else
-                    # --- REAL EXECUTION ---
                     _record_image_state "$app_dir" "$image" "$id_before"
 
-                    # 2. Perform the pull
                     local pull_output; pull_output=$($SUDO_CMD docker pull "$image" 2>&1)
                     local pull_exit_code=$?
                     echo "$pull_output" >> "${LOG_FILE:-/dev/null}"
@@ -672,11 +620,9 @@ _update_app_task() {
                         continue
                     fi
                     
-                    # 3. Capture Image ID AFTER
                     id_after=$($SUDO_CMD docker inspect --format='{{.Id}}' "$image" 2>/dev/null)
                 fi
 
-                # 4. Compare IDs
                 if [[ "$id_before" != "$id_after" ]] && [[ "$id_before" != "not_found" ]]; then
                     log "New image found for $image (Hash changed)." "   -> ${C_GREEN}Newer image downloaded!${C_RESET}"
                     update_was_found=true
@@ -687,7 +633,6 @@ _update_app_task() {
         fi
     fi
 
-    # --- Step 2: Restart Application ---
     if $all_pulls_succeeded; then
         if $was_running || [[ "$force_mode" == "true" ]]; then
             if $update_was_found; then
@@ -734,8 +679,6 @@ _rollback_app_task() {
         return
     fi
 
-    # Read history into array (reversed to show newest first)
-    # Uses sed '1!G;h;$!d' as a portable replacement for 'tac'
     mapfile -t history_lines < <(sed '1!G;h;$!d' "$history_file")
     
     if [ ${#history_lines[@]} -eq 0 ]; then
@@ -753,18 +696,15 @@ _rollback_app_task() {
     for line in "${history_lines[@]}"; do
         IFS='|' read -r timestamp img_name img_id <<< "$line"
         
-        # Check if this ID still exists locally
         if $SUDO_CMD docker image inspect "$img_id" &>/dev/null; then
-            local short_id="${img_id:7:12}" # Remove sha256: and truncate
+            local short_id="${img_id:7:12}"
             printf "%-4s | %-20s | %-30s | %s\n" "$((display_count+1))" "$timestamp" "${img_name:0:28}.." "$short_id"
             valid_choices+=("$line")
             ((display_count++))
         else
-            # Optional: indicate pruned images? For now, just skip them to keep the list clean.
             continue
         fi
-        
-        # Limit to last 10 valid options
+
         if [ $display_count -ge 10 ]; then break; fi
     done
     echo "----------------------------------------------------------------"
@@ -788,11 +728,8 @@ _rollback_app_task() {
         if [[ "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then
             log "Rolling back $app_name image $r_name to $r_id..."
             
-            # 1. Retag the old ID to the current name
             if execute_and_log $SUDO_CMD docker tag "$r_id" "$r_name"; then
                 echo -e "${C_GREEN}Image successfully retagged.${C_RESET}"
-                
-                # 2. Restart the app
                 echo "Restarting application to apply change..."
                 _stop_app_task "$app_name" "$app_dir"
                 _start_app_task "$app_name" "$app_dir" "--force-recreate"
@@ -816,7 +753,6 @@ app_manager_status() {
     local less_prompt="(Scroll with arrow keys, press 'q' to return)"
     (
         declare -A running_projects
-        # This is a more robust method to find running projects, less prone to breaking with docker updates.
         while read -r proj; do
             [[ -n "$proj" ]] && running_projects["$proj"]=1
         done < <($SUDO_CMD docker compose ls | grep 'running' | awk '{print $1}')
@@ -848,15 +784,13 @@ app_manager_interactive_handler() {
     local base_path="$3"
 
     while true; do
-        # Options array
         local options=(
             "Start ${app_type_name} Apps"
             "Stop ${app_type_name} Apps"
             "Update ${app_type_name} Apps"
             "Rollback ${app_type_name} Apps"
         )
-        
-        # Use shared UI function
+
         print_standard_menu "Manage ${app_type_name} Apps" options "RQ"
         
         read -rp "${C_YELLOW}Please select an option: ${C_RESET}" choice
@@ -921,8 +855,7 @@ app_manager_interactive_handler() {
         menu_result=$?
 
         if [[ $menu_result -eq 1 ]]; then log "User quit. No action taken." ""; continue; fi
-        
-        # Check for multiple selections in Rollback mode
+
         if [[ "$action" == "rollback" ]]; then
             local count=0
             for i in "${!selected_status[@]}"; do
@@ -958,13 +891,9 @@ app_manager_interactive_handler() {
 app_manager_update_all_known_apps() {
     check_root
     log "Starting update for RUNNING applications..."
-
-    # --- Using a robust method to find running projects ---
     log "Discovering currently running Docker Compose projects..."
     declare -A running_projects
-    # This is the most compatible method. It avoids --filter and --format flags,
-    # which are failing on this system. It parses the default, human-readable
-    # command output to find projects with a "running" status.
+
     while read -r proj; do
         [[ -n "$proj" ]] && running_projects["$proj"]=1
     done < <($SUDO_CMD docker compose ls | grep 'running' | awk '{print $1}')
@@ -1046,11 +975,6 @@ app_manager_menu() {
     done
 }
 
-
-# ======================================================================================
-# --- SECTION 4: VOLUME MANAGER & CHECKER MODULE ---
-# ======================================================================================
-
 ensure_backup_image() {
     log "Checking for backup image: $BACKUP_IMAGE"
     if ! $SUDO_CMD docker image inspect "${BACKUP_IMAGE}" &>/dev/null; then
@@ -1082,7 +1006,6 @@ ensure_explore_image() {
     log "Checking for explorer image: ${EXPLORE_IMAGE}"
     if ! $SUDO_CMD docker image inspect "${EXPLORE_IMAGE}" &>/dev/null; then
         if [[ "$IS_CRON_RUN" == "true" ]]; then
-             # Unlikely to use explorer in cron, but good safety
              if ! execute_and_log $SUDO_CMD docker pull "${EXPLORE_IMAGE}"; then return 1; fi
         else
             echo -e "${C_YELLOW}The required explorer image (${C_CYAN}${EXPLORE_IMAGE}${C_YELLOW}) is missing.${C_RESET}"
@@ -1121,10 +1044,7 @@ volume_checker_calculate_size() {
 
 volume_checker_explore() {
     local volume_name="$1"
-    #  Ensures image exists before starting
     if ! ensure_explore_image; then return; fi
-
-    # Truncate volume name for the prompt (first 12 chars) to prevent massive prompts
     local short_name="${volume_name:0:12}"
 
     clear
@@ -1136,7 +1056,6 @@ volume_checker_explore() {
     echo -e "${C_YELLOW}The volume ${C_CYAN}${volume_name} ${C_YELLOW}is mounted read-write at ${C_CYAN}/volume${C_YELLOW}."
     echo -e "${C_YELLOW}Type ${C_GREEN}'exit' ${C_YELLOW}or press ${C_GREEN}Ctrl+D ${C_YELLOW}to return.${C_RESET}\n"
 
-    # We use \\\[ and \\\] to correctly escape color codes for Readline, fixing the line-wrap visual glitches.
     $SUDO_CMD docker run --rm -it \
         -e TERM="$TERM" \
         -v "${volume_name}:/volume" \
@@ -1217,7 +1136,6 @@ volume_checker_main() {
 _find_project_dir_by_name() {
     local project_name="$1"
     
-    # Search in Essential Apps path
     if [ -d "$APPS_BASE_PATH/$project_name" ]; then
         if find_compose_file "$APPS_BASE_PATH/$project_name" &>/dev/null; then
             echo "$APPS_BASE_PATH/$project_name"
@@ -1225,7 +1143,6 @@ _find_project_dir_by_name() {
         fi
     fi
 
-    # Search in Managed Apps path
     local managed_path="$APPS_BASE_PATH/$MANAGED_SUBDIR"
     if [ -d "$managed_path/$project_name" ]; then
         if find_compose_file "$managed_path/$project_name" &>/dev/null; then
@@ -1234,13 +1151,12 @@ _find_project_dir_by_name() {
         fi
     fi
     
-    return 1 # Not found
+    return 1
 }
 
 volume_smart_backup_main() {
     clear; echo -e "${C_GREEN}Starting Smart Docker Volume Backup...${C_RESET}"
 
-    # Updated Check
     ensure_backup_image || return
 
     mapfile -t all_volumes < <($SUDO_CMD docker volume ls --format "{{.Name}}"); local -a filtered_volumes=()
@@ -1252,7 +1168,6 @@ volume_smart_backup_main() {
     local selected_volumes=(); for i in "${!filtered_volumes[@]}"; do if ${selected_status[$i]}; then selected_volumes+=("${filtered_volumes[$i]}"); fi; done
     if [[ ${#selected_volumes[@]} -eq 0 ]]; then echo -e "\n${C_RED}No volumes selected! Exiting.${C_RESET}"; return; fi
 
-    # --- Phase 1: Group selected volumes by the app that owns them ---
     echo -e "\n${C_YELLOW}Analyzing volumes and grouping them by application...${C_RESET}"
     declare -A app_volumes_map
     declare -A app_dir_map
@@ -1293,7 +1208,6 @@ volume_smart_backup_main() {
 
     local backup_dir="${BACKUP_LOCATION%/}/$(date +'%Y-%m-%d_%H-%M-%S')"; mkdir -p "$backup_dir"
 
-    # --- Phase 2: Process App Backups ---
     if [ -n "${!app_volumes_map[*]}" ]; then
         echo -e "\n${C_GREEN}--- Processing Application-Linked Backups ---${C_RESET}"
         for app_name in "${!app_volumes_map[@]}"; do
@@ -1311,7 +1225,6 @@ volume_smart_backup_main() {
         done
     fi
 
-    # --- Phase 3: Process Standalone Backups ---
     if [[ ${#standalone_volumes[@]} -gt 0 ]]; then
         echo -e "\n${C_GREEN}--- Processing Standalone Volume Backups ---${C_RESET}"
         for volume in "${standalone_volumes[@]}"; do
@@ -1324,7 +1237,6 @@ volume_smart_backup_main() {
     $SUDO_CMD chown -R "${CURRENT_USER}:${CURRENT_USER}" "$backup_dir"
     echo -e "\n${C_GREEN}${TICKMARK} Backup tasks completed successfully!${C_RESET}"
 
-    # --- Phase 4: Create Secure RAR Archive ---
     local create_rar=""
     while true; do
         read -p $'\n'"${C_CYAN}Do you want to create a password-protected RAR archive of this backup? (Y/N): ${C_RESET}" create_rar
@@ -1340,7 +1252,6 @@ volume_smart_backup_main() {
     local archive_password=""
     local password_is_set=false
 
-    # --- Password Selection Loop ---
     if [[ -n "${ENCRYPTED_RAR_PASSWORD-}" ]]; then
         echo -e "\n${C_CYAN}A default archive password is configured.${C_RESET}"
         while true; do
@@ -1374,7 +1285,6 @@ volume_smart_backup_main() {
         done
     fi
 
-    # Manual Password Entry Loop
     if ! $password_is_set; then
         while true; do
             read -sp "Enter password for the archive (leave blank for none): " rar_pass_1; echo
@@ -1393,7 +1303,6 @@ volume_smart_backup_main() {
         done
     fi
 
-    # --- Archive Naming Logic ---
     local current_date=$(date +'%d.%m.%Y')
     local archive_name=""
     
@@ -1408,40 +1317,31 @@ volume_smart_backup_main() {
     case "$name_choice" in
         2)
             read -p "Enter tag name (e.g., 'Plex' or 'Databases'): " tag_name
-            # Sanitization: Replace slashes with dashes to prevent path errors
             tag_name="${tag_name//\//-}" 
             archive_name="Apps-backup(${tag_name})[${current_date}].rar"
             ;;
         3)
             read -p "Enter full filename: " custom_name
-            # Sanitization: Replace slashes with dashes
             custom_name="${custom_name//\//-}"
-            # Ensure the name ends with .rar
             if [[ "${custom_name}" != *.rar ]]; then custom_name="${custom_name}.rar"; fi
             archive_name="$custom_name"
             ;;
         4)
-            # Useful for multiple backups in the same day
             archive_name="Apps-backup[$(date +'%d.%m.%Y_%H-%M-%S')].rar"
             ;;
         *) 
-            # Default (Option 1 or Enter)
             archive_name="Apps-backup[${current_date}].rar"
             ;;
     esac
 
     local archive_path="$(dirname "$backup_dir")/${archive_name}"
 
-    # --- Duplicate Check ---
-    # If file exists, append a timestamp to prevent overwriting unless Option 4 was chosen (which is already unique)
     if [[ -f "$archive_path" ]] || [[ -f "${archive_path%.rar}.part1.rar" ]]; then
         echo -e "${C_YELLOW}File '${archive_name}' already exists. Appending timestamp...${C_RESET}"
-        # We strip the .rar extension, add timestamp, and put .rar back
         archive_name="${archive_name%.rar}_$(date +'%H%M%S').rar"
         archive_path="$(dirname "$backup_dir")/${archive_name}"
     fi
 
-    # --- Split Logic ---
     local rar_split_opt=""
     local total_size
     total_size=$(du -sb "$backup_dir" | awk '{print $1}')
@@ -1456,17 +1356,11 @@ volume_smart_backup_main() {
         read -p "${C_YELLOW}Enter choice [${C_RESET}1${C_YELLOW}-${C_RESET}4${C_YELLOW}]: ${C_RESET}" split_choice
         case "$split_choice" in
             1) rar_split_opt=""; break ;;
-            # Note: 'm' and 'M' in standard RAR command mean different things.
-            # 'M' = 1,000,000 bytes (Decimal). 'm' = 1024*1024 bytes (Binary).
-            # We use 'm' here to match what the OS displays.
             2) rar_split_opt="-v4095m"; echo -e "${C_CYAN}-> Splitting at 4GB (FAT32 safe).${C_RESET}"; break ;;
             3) rar_split_opt="-v8192m"; echo -e "${C_CYAN}-> Splitting at 8GB.${C_RESET}"; break ;;
             4) 
                 read -p "${C_YELLOW}Enter size (e.g., ${C_RESET}500m ${C_YELLOW}or ${C_RESET}2g${C_YELLOW}): ${C_RESET}" custom_size
                 if [[ "$custom_size" =~ ^[0-9]+[mMgG]$ ]]; then
-                    # Force unit to lowercase (m/g) so rar uses binary calculation (1024 multiplier)
-                    # This ensures '500m' results in 500 MiB (approx 524 MB decimal), 
-                    # which matches "500 MB" in Windows Explorer.
                     local safe_size="${custom_size,,}"
                     rar_split_opt="-v${safe_size}"
                     echo -e "${C_CYAN}-> Splitting at ${C_GREEN}${safe_size}${C_CYAN} (Binary units).${C_RESET}"
@@ -1487,7 +1381,6 @@ volume_smart_backup_main() {
 
     local rar_cmd=(rar a -ep1)
     [[ -n "$rar_split_opt" ]] && rar_cmd+=("$rar_split_opt")
-    # Added "-y" to assume Yes on all queries (prevents freezing on overwrite prompts)
     rar_cmd+=("-m${RAR_COMPRESSION_LEVEL:-3}" "-k" "-y")
 
     if [[ -n "$archive_password" ]]; then
@@ -1503,7 +1396,6 @@ volume_smart_backup_main() {
         fi
     fi
 
-    # --- Colorized Log Output ---
     while IFS= read -r line; do
         if [[ "$line" =~ (Done|OK|All OK) ]]; then
             echo -e "${C_GREEN}${line}${C_RESET}"
@@ -1524,27 +1416,22 @@ volume_smart_backup_main() {
     if $rar_success; then
         echo -e "\n${C_GREEN}RAR archive created successfully.${C_RESET}\n"
 
-        # --- Handle Split Archives for Verification ---
         local file_to_verify="$archive_path"
-        
-        # If the standard .rar doesn't exist, check for a .part1.rar (split archive)
+
         if [[ ! -f "$file_to_verify" ]] && [[ -f "${archive_path%.rar}.part1.rar" ]]; then
             file_to_verify="${archive_path%.rar}.part1.rar"
             echo -e "${C_CYAN}Detected split archive. Verifying part 1 sequence...${C_RESET}"
         fi
 
-        # --- Verify the archive integrity ---
         echo -e "${C_YELLOW}Verifying archive integrity...${C_RESET}"
         local verify_cmd=(rar t)
         [[ -n "$archive_password" ]] && verify_cmd+=("-p${archive_password}")
 
-        # Use the corrected filename here
         verify_cmd+=("--" "$file_to_verify")
         if "${verify_cmd[@]}" &>/dev/null; then
              echo -e "${C_GREEN}Verification Passed: Archive is healthy.${C_RESET}\n"
         else
              echo -e "${C_LIGHT_RED}Verification FAILED! Do not delete the source files.${C_RESET}\n"
-             # This prevents the delete prompt from appearing if verification fails
              return 1
         fi
 
@@ -1572,8 +1459,6 @@ volume_smart_backup_main() {
 
 volume_restore_main() {
     clear; echo -e "${C_GREEN}Starting Docker Volume Restore...${C_RESET}"
-
-    # Updated Check
     ensure_backup_image || return
     
     mapfile -t backup_files < <(find "$RESTORE_LOCATION" -type f \( -name "*.tar.zst" -o -name "*.tar.gz" \) 2>/dev/null | sort)
@@ -1641,11 +1526,6 @@ volume_manager_menu() {
         esac
     done
 }
-
-
-# ======================================================================================
-# --- SECTION 5: UTILITY MODULES ---
-# ======================================================================================
 
 system_prune_main() {
     check_root
@@ -1786,7 +1666,6 @@ update_secure_archive_settings() {
         fi
 
         if [[ -z "$rar_pass_1" ]]; then
-            # User wants to remove the password
             break
         fi
         read -sp "Confirm new password: " rar_pass_2; echo
@@ -1800,20 +1679,14 @@ update_secure_archive_settings() {
     done
 
     echo -e "\n${C_YELLOW}Updating configuration file...${C_RESET}"
-    # Use printf to create a safely quoted line for both replacement and appending.
     local new_config_line
     new_config_line=$(printf "ENCRYPTED_RAR_PASSWORD=%q" "${ENCRYPTED_RAR_PASSWORD}")
 
-    # --- Robustly update the config file ---
-    # 1. Delete any existing ENCRYPTED_RAR_PASSWORD lines to prevent duplicates and clean up.
     sed -i '/^ENCRYPTED_RAR_PASSWORD=/d' "$CONFIG_FILE"
 
-    # 2. Insert the new line in the correct section for organization.
-    #    This finds the anchor comment and adds the password line after it.
     local anchor="# RAR Password is encrypted using a machine-specific key."
     sed -i "\|$anchor|a ${new_config_line}" "$CONFIG_FILE"
-    
-    # Reload the config into the current script session
+
     source "$CONFIG_FILE"
 
     if [[ -z "$ENCRYPTED_RAR_PASSWORD" ]]; then
@@ -1823,22 +1696,18 @@ update_secure_archive_settings() {
     fi
 }
 
-# --- Unused Image Updater Function ---
 update_unused_images_main() {
     check_root
-    
-    # Use the global IS_CRON_RUN variable instead of local logic.
     if [[ "$IS_CRON_RUN" == "false" ]]; then clear; fi
-    
+
     log "Starting unused image update script." "${C_GREEN}--- Starting Unused Docker Image Updater ---${C_RESET}"
     if $DRY_RUN; then log "--- Starting in Dry Run mode. No changes will be made. ---" "${C_GRAY}[DRY RUN] No changes will be made.${C_RESET}"; fi
 
-    # Convert IGNORED_IMAGES array to a grep pattern
     local ignored_pattern
     if [[ ${#IGNORED_IMAGES[@]} -gt 0 ]]; then
         ignored_pattern=$(IFS="|"; echo "${IGNORED_IMAGES[*]}")
     else
-        ignored_pattern="^$" # A pattern that matches nothing
+        ignored_pattern="^$"
     fi
 
     local total_images_scanned=0 used_count=0 ignored_count=0 unpullable_count=0
@@ -1882,7 +1751,7 @@ update_unused_images_main() {
                 execute_and_log $SUDO_CMD docker pull "$image"
             ) &
         done
-        wait # Wait for all background pull jobs to finish
+        wait
         log "All image updates are complete." "${C_GREEN}All image pulls are complete.${C_RESET}"
     else
         log "No unused images found to update." "${C_YELLOW}No unused images found to update.${C_RESET}"
@@ -1901,7 +1770,6 @@ update_unused_images_main() {
     log "--- Update Summary ---"; log "Total images scanned: $total_images_scanned"; log "Images updated/to be updated: $updated_count"; log "Images skipped (in use): $used_count"; log "Images skipped (on ignore list): $ignored_count"; log "Images skipped (un-pullable): $unpullable_count"; log "Script finished."
 }
 
-# --- Cron Job Setup for Unused Image Updater ---
 setup_unused_images_cron_job() {
     check_root
     echo -e "\n${C_YELLOW}--- Schedule Automatic Unused Image Updates ---${C_RESET}"
@@ -1997,9 +1865,7 @@ _update_config_value() {
     read -p "$prompt_text [${C_GREEN}${current_value}${C_RESET}]: " new_value
     new_value=${new_value:-$current_value}
 
-    # Use sed to replace the line in-place if it exists, otherwise append it.
     if grep -q "^${key}=" "$CONFIG_FILE"; then
-        # Use a temporary variable to handle potential special characters for sed
         local replacement; replacement=$(printf "%q" "$new_value")
         sed -i "/^${key}=/c\\${key}=${replacement}" "$CONFIG_FILE"
     else
@@ -2007,19 +1873,16 @@ _update_config_value() {
     fi
     
     echo -e "${C_GREEN}${TICKMARK} Setting '${key}' updated.${C_RESET}"
-    # Reload the config into the current script session to reflect changes immediately
     source "$CONFIG_FILE"
 }
 
 update_ignored_items() {
-    local item_type="$1" # "Volumes" or "Images"
+    local item_type="$1"
     local -n source_items_ref="$2"
     local -n ignored_items_ref="$3"
     
     check_root
-    
-    # Combining the live list from Docker with the already configured ignored list.
-    #    This ensures custom entries are preserved and displayed.
+
     local -a combined_list=("${source_items_ref[@]}" "${ignored_items_ref[@]}")
     mapfile -t all_available_items < <(printf "%s\n" "${combined_list[@]}" | sort -u)
     
@@ -2028,7 +1891,6 @@ update_ignored_items() {
     fi
 
     local -a selected_status=()
-    # Check against the combined list
     for item in "${all_available_items[@]}"; do
         if [[ " ${ignored_items_ref[*]} " =~ " ${item} " ]]; then
             selected_status+=("true")
@@ -2039,8 +1901,7 @@ update_ignored_items() {
 
     local -a new_ignored_list=()
     local title="Select ${item_type} to IGNORE"
-    
-    # Use the combined list for the menu
+
     if ! show_selection_menu "$title" "confirm" all_available_items selected_status; then
         echo -e "${C_YELLOW}Update cancelled.${C_RESET}"; return
     fi
@@ -2052,8 +1913,6 @@ update_ignored_items() {
     local config_key="IGNORED_${item_type^^}"
     local temp_file; temp_file=$(mktemp)
 
-    # It finds the start of the block (e.g., "IGNORED_VOLUMES=(") and ignores lines until
-    # it finds the closing parenthesis, without relying on fragile comments.
     awk -v key="$config_key" '
         $0 ~ "^" key "=\\(" { in_block = 1 }
         !in_block { print }
@@ -2061,7 +1920,6 @@ update_ignored_items() {
     ' "$CONFIG_FILE" > "$temp_file"
     mv "$temp_file" "$CONFIG_FILE"
 
-    # Appending the newly generated block safely to the end of the file.
     {
         echo "# List of ${item_type,,} to ignore during operations."
         echo -n "${config_key}=("
@@ -2092,7 +1950,7 @@ settings_manager_menu() {
         read -rp "${C_YELLOW}Please select an option: ${C_RESET}" choice
         
         case "$choice" in
-            1) # Path Settings
+            1)
                 clear; echo -e "${C_YELLOW}--- Path Settings ---${C_RESET}"
                 _update_config_value "APPS_BASE_PATH" "Base Compose Apps Path" "$APPS_BASE_PATH"
                 _update_config_value "MANAGED_SUBDIR" "Managed Apps Subdirectory" "$MANAGED_SUBDIR"
@@ -2101,23 +1959,23 @@ settings_manager_menu() {
                 _update_config_value "LOG_DIR" "Log Directory Path" "$LOG_DIR"
                 echo -e "\n${C_CYAN}Path settings updated. Press Enter...${C_RESET}"; read -r
                 ;;
-            2) # Helper Images
+            2)
                 clear; echo -e "${C_YELLOW}--- Helper Image Settings ---${C_RESET}"
                 _update_config_value "BACKUP_IMAGE" "Backup Helper Image" "$BACKUP_IMAGE"
                 _update_config_value "EXPLORE_IMAGE" "Volume Explorer Image" "$EXPLORE_IMAGE"
                 echo -e "\n${C_CYAN}Image settings updated. Press Enter...${C_RESET}"; read -r
                 ;;
-            3) # Ignored Volumes
+            3)
                 local -a all_volumes; mapfile -t all_volumes < <($SUDO_CMD docker volume ls --format "{{.Name}}" | sort)
                 update_ignored_items "Volumes" "all_volumes" "IGNORED_VOLUMES"
                 echo -e "\nPress Enter to return..."; read -r
                 ;;
-            4) # Ignored Images
+            4)
                 local -a all_images; mapfile -t all_images < <($SUDO_CMD docker image ls --format "{{.Repository}}:{{.Tag}}" | grep -v "<none>" | sort)
                 update_ignored_items "Images" "all_images" "IGNORED_IMAGES"
                 echo -e "\nPress Enter to return..."; read -r
                 ;;
-            5) # Archive Settings
+            5)
                 clear; echo -e "${C_YELLOW}--- Archive Settings ---${C_RESET}"
                 
                 update_secure_archive_settings
@@ -2125,11 +1983,11 @@ settings_manager_menu() {
 
                 echo -e "\n${C_CYAN}Archive settings updated. Press Enter...${C_RESET}"; read -r
                 ;;
-            6) # Schedule Apps Updater
+            6)
                 setup_cron_job
                 echo -e "\nPress Enter to return..."; read -r
                 ;;
-            7) # Schedule Unused Image Updater
+            7)
                 setup_unused_images_cron_job
                 echo -e "\nPress Enter to return..."; read -r
                 ;;
@@ -2140,10 +1998,6 @@ settings_manager_menu() {
     done
 }
 
-# ======================================================================================
-# --- SECTION 6: MAIN SCRIPT EXECUTION ---
-# ======================================================================================
-
 main_menu() {
     local options=(
         "Application Manager"
@@ -2151,7 +2005,6 @@ main_menu() {
         "Utilities"
     )
     while true; do
-        # Use "Q" mode to show only Quit, not Return
         print_standard_menu "Docker Tool Suite ${SCRIPT_VERSION} - ${C_CYAN}${CURRENT_USER}" options "Q"
         
         read -rp "${C_YELLOW}Please select an option: ${C_RESET}" choice
@@ -2193,7 +2046,6 @@ if [[ $# -gt 0 ]]; then
             exit 0 ;;
     esac
 
-    # Source config after help check so help works without config
     source "$CONFIG_FILE"
     prune_old_logs
     
@@ -2201,8 +2053,7 @@ if [[ $# -gt 0 ]]; then
         update)
             shift
             log_prefix="dtools-au"
-            
-            # Parse arguments
+
             while (( "$#" )); do
               case "$1" in
                 --dry-run) DRY_RUN=true; shift ;;
@@ -2211,14 +2062,11 @@ if [[ $# -gt 0 ]]; then
               esac
             done
 
-            # Apply dry-run suffix regardless of cron status
             if [ "$DRY_RUN" = true ]; then log_prefix="${log_prefix}-dry-run"; fi
 
             if [ "$IS_CRON_RUN" = true ]; then
                 _enable_cron_logging "${LOG_SUBDIR_UPDATE:-apps-update-logs}" "$log_prefix"
             else
-                # For manual runs, we set LOG_FILE so the log() function works
-                # but we DO NOT redirect stdout/stderr, so user sees progress on screen.
                 log_dir="${LOG_DIR}/${LOG_SUBDIR_UPDATE:-apps-update-logs}"
                 mkdir -p "$log_dir"
                 LOG_FILE="${log_dir}/${log_prefix}-$(date +'%Y-%m-%d').log"
