@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # ======================================================================================
 
-SCRIPT_VERSION=v1.4.6
+SCRIPT_VERSION=v1.4.7
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -334,7 +334,7 @@ initial_setup() {
     
     echo -e "-----------------------------------------------------\n"
     echo -e "${C_YELLOW}--- Configure Path Settings ---${C_RESET}\n"
-    echo -e "${C_GRAY}Leave the defualt paths or enter your own. \n${C_RESET}"
+    echo -e "${C_GRAY}Leave the default paths or enter your own. \n${C_RESET}"
     read -p "Base Compose Apps Path [${C_GREEN}${apps_path_def}${C_RESET}]: " apps_path; APPS_BASE_PATH=${apps_path:-$apps_path_def}
     read -p "Managed Apps Subdirectory [${C_GREEN}${managed_subdir_def}${C_RESET}]: " managed_subdir; MANAGED_SUBDIR=${managed_subdir:-$managed_subdir_def}
     read -p "Volume Backup Location [${C_GREEN}${backup_path_def}${C_RESET}]: " backup_loc; BACKUP_LOCATION=${backup_loc:-$backup_path_def}
@@ -422,7 +422,10 @@ initial_setup() {
     echo -e "    RAR Level:       ${C_GREEN}${RAR_COMPRESSION_LEVEL}${C_RESET}"
     echo "  Logs:"
     echo -e "    Log Path:        ${C_GREEN}${LOG_DIR}${C_RESET}"
-    echo -e "    Log Retention:   ${C_GREEN}${LOG_RETENTION_DAYS} days${C_RESET}\n"
+    echo -e "    Log Retention:   ${C_GREEN}${LOG_RETENTION_DAYS} days${C_RESET}"
+    echo "  Ignored Items:"
+    echo -e "    Volumes:         ${C_GREEN}${#selected_ignored_volumes[@]} selected${C_RESET}"
+    echo -e "    Images:          ${C_GREEN}${#selected_ignored_images[@]} selected${C_RESET}\n"
     
     read -p "Save this configuration? (Y/n): " confirm_setup
     if [[ ! "${confirm_setup,,}" =~ ^(y|Y|yes|YES)$ ]]; then echo -e "\n${C_RED}Setup canceled.${C_RESET}"; exit 0; fi
@@ -484,7 +487,11 @@ initial_setup() {
     mkdir -p "${APPS_BASE_PATH}/${MANAGED_SUBDIR}" "${BACKUP_LOCATION}" "${RESTORE_LOCATION}" "${LOG_DIR}"
     chown -R "${CURRENT_USER}:${CURRENT_USER}" "${CONFIG_DIR}" "${APPS_BASE_PATH}" "${BACKUP_LOCATION}" "${RESTORE_LOCATION}" "${LOG_DIR}"
 
+    # Call setup for App Updates
     setup_cron_job
+
+    # Call setup for Unused Image Updates
+    setup_unused_images_cron_job
 
     echo -e "\n${C_GREEN}${TICKMARK} Setup complete! The script will now continue.${C_RESET}\n"; sleep 2
 }
