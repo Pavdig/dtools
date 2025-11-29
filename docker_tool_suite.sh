@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # ======================================================================================
 
-SCRIPT_VERSION=v1.4.7
+SCRIPT_VERSION=v1.4.8
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -418,6 +418,8 @@ initial_setup() {
     echo "  Volume Manager:"
     echo -e "    Backup Path:     ${C_GREEN}${BACKUP_LOCATION}${C_RESET}"
     echo -e "    Restore Path:    ${C_GREEN}${RESTORE_LOCATION}${C_RESET}"
+    echo -e "    Backup Image:    ${C_GREEN}${BACKUP_IMAGE}${C_RESET}"
+    echo -e "    Explorer Image:  ${C_GREEN}${EXPLORE_IMAGE}${C_RESET}"
     echo "  Archive Settings:"
     echo -e "    RAR Level:       ${C_GREEN}${RAR_COMPRESSION_LEVEL}${C_RESET}"
     echo "  Logs:"
@@ -1041,24 +1043,53 @@ app_manager_menu() {
 # ======================================================================================
 
 ensure_backup_image() {
-    log "Checking for backup image: $BACKUP_IMAGE" "-> Checking for Docker image: ${C_BLUE}${BACKUP_IMAGE}${C_RESET}..."
+    log "Checking for backup image: $BACKUP_IMAGE"
     if ! $SUDO_CMD docker image inspect "${BACKUP_IMAGE}" &>/dev/null; then
-        log "Image not found, pulling..." "   -> Image not found locally. Pulling..."
-        if ! execute_and_log $SUDO_CMD docker pull "${BACKUP_IMAGE}"; then log "ERROR: Failed to pull backup image." "${C_RED}Error: Failed to pull...${C_RESET}"; exit 1; fi
+        if [[ "$IS_CRON_RUN" == "true" ]]; then
+            log "Image not found (Cron mode), pulling..."
+            if ! execute_and_log $SUDO_CMD docker pull "${BACKUP_IMAGE}"; then 
+                log "ERROR: Failed to pull backup image."
+                return 1
+            fi
+        else
+            echo -e "${C_YELLOW}The required helper image (${C_BLUE}${BACKUP_IMAGE}${C_YELLOW}) is missing.${C_RESET}"
+            read -p "Download it now? (y/N): " confirm_dl
+            if [[ "${confirm_dl,,}" =~ ^(y|Y|yes|YES)$ ]]; then
+                echo -e "-> Pulling image..."
+                if ! execute_and_log $SUDO_CMD docker pull "${BACKUP_IMAGE}"; then 
+                    echo -e "${C_RED}Error: Failed to pull image.${C_RESET}"
+                    return 1
+                fi
+            else
+                echo -e "${C_RED}Operation canceled. Function requires this image.${C_RESET}"
+                return 1
+            fi
+        fi
     fi
-    log "Backup image OK." "-> Image OK.\n"
+    return 0
 }
 
 ensure_explore_image() {
-    log "Checking for explorer image: ${EXPLORE_IMAGE}" "-> Checking for Explorer image: ${C_BLUE}${EXPLORE_IMAGE}${C_RESET}..."
+    log "Checking for explorer image: ${EXPLORE_IMAGE}"
     if ! $SUDO_CMD docker image inspect "${EXPLORE_IMAGE}" &>/dev/null; then
-        log "Explorer image not found, pulling..." "   -> Image not found locally. Pulling..."
-        if ! execute_and_log $SUDO_CMD docker pull "${EXPLORE_IMAGE}"; then 
-            log "ERROR: Failed to pull explorer image." "${C_RED}Error: Failed to pull ${EXPLORE_IMAGE}...${C_RESET}"
-            return 1
+        if [[ "$IS_CRON_RUN" == "true" ]]; then
+             # Unlikely to use explorer in cron, but good safety
+             if ! execute_and_log $SUDO_CMD docker pull "${EXPLORE_IMAGE}"; then return 1; fi
+        else
+            echo -e "${C_YELLOW}The required explorer image (${C_BLUE}${EXPLORE_IMAGE}${C_YELLOW}) is missing.${C_RESET}"
+            read -p "Download it now? (y/N): " confirm_dl
+            if [[ "${confirm_dl,,}" =~ ^(y|Y|yes|YES)$ ]]; then
+                echo -e "-> Pulling image..."
+                if ! execute_and_log $SUDO_CMD docker pull "${EXPLORE_IMAGE}"; then 
+                    echo -e "${C_RED}Error: Failed to pull image.${C_RESET}"
+                    return 1
+                fi
+            else
+                echo -e "${C_RED}Operation canceled. Function requires this image.${C_RESET}"
+                return 1
+            fi
         fi
     fi
-    log "Explorer image OK." "-> Image OK.\n"
     return 0
 }
 
@@ -1084,6 +1115,9 @@ volume_checker_explore() {
     #  Ensures image exists before starting
     if ! ensure_explore_image; then return; fi
 
+    # Truncate volume name for the prompt (first 12 chars) to prevent massive prompts
+    local short_name="${volume_name:0:12}"
+
     clear
     echo -e "${C_RESET}=============================================="
     echo -e "          ${C_GREEN}Docker Tool Suite ${SCRIPT_VERSION}"
@@ -1093,6 +1127,7 @@ volume_checker_explore() {
     echo -e "${C_YELLOW}The volume ${C_BLUE}${volume_name} ${C_YELLOW}is mounted read-write at ${C_BLUE}/volume${C_YELLOW}."
     echo -e "${C_YELLOW}Type ${C_GREEN}'exit' ${C_YELLOW}or press ${C_GREEN}Ctrl+D ${C_YELLOW}to return.${C_RESET}\n"
 
+    # We use \\\[ and \\\] to correctly escape color codes for Readline, fixing the line-wrap visual glitches.
     $SUDO_CMD docker run --rm -it \
         -e TERM="$TERM" \
         -v "${volume_name}:/volume" \
@@ -1100,7 +1135,7 @@ volume_checker_explore() {
         -w /volume \
         "${EXPLORE_IMAGE}" \
         bash -c "echo -e \"alias ll='ls -lah --color=auto'\" >> ~/.bashrc; \
-                 echo -e \"export PS1='${C_RESET}[${C_GREEN}VOLUME-EXPLORER${C_RESET}@${C_BLUE}${volume_name}${C_RESET}:${C_GREEN}\w${C_RESET}] ${C_GREEN}# ${C_RESET}'\" >> ~/.bashrc; \
+                 echo -e \"export PS1='\\\\[${C_RESET}\\\\][\\\\[${C_GREEN}\\\\]VOL-EXPLORER\\\\[${C_RESET}\\\\]@\\\\[${C_BLUE}\\\\]${short_name}\\\\[${C_RESET}\\\\]:\\\\[${C_GREEN}\\\\]\w\\\\[${C_RESET}\\\\]] \\\\[${C_GREEN}\\\\]# \\\\[${C_RESET}\\\\] '\" >> ~/.bashrc; \
                  exec bash" || true
 }
 
@@ -1128,16 +1163,20 @@ volume_checker_menu() {
         PS3=$'\n'"${C_YELLOW}Enter action number: ${C_RESET}"; select action in "${options[@]}"; do
             case "$action" in
                 "${C_YELLOW}List volume files${C_RESET}")
+                    ensure_backup_image || break
                     volume_checker_list_files "${volume_name}"
                     echo -e "\n${C_BLUE}Action complete. Press Enter to return to menu...${C_RESET}"; read -r
                     break
                     ;;
                 "${C_YELLOW}Calculate volume size${C_RESET}")
+                    ensure_backup_image || break
                     volume_checker_calculate_size "${volume_name}"
                     echo -e "\n${C_BLUE}Action complete. Press Enter to return to menu...${C_RESET}"; read -r
                     break
                     ;;
-                "${C_BLUE}Explore volume in shell${C_RESET}") volume_checker_explore "${volume_name}"; break ;;
+                "${C_BLUE}Explore volume in shell${C_RESET}") 
+                    ensure_explore_image || break
+                    volume_checker_explore "${volume_name}"; break ;;
                 "${C_BOLD_RED}Remove volume${C_RESET}") if volume_checker_remove "${volume_name}"; then return; fi; break ;;
                 "${C_GRAY}Return to volume list${C_RESET}") return ;;
                 "${C_RED}Quit${C_RESET}") exit 0 ;;
@@ -1148,7 +1187,6 @@ volume_checker_menu() {
 }
 
 volume_checker_main() {
-    ensure_backup_image
     while true; do
         clear
         echo -e "${C_RESET}=============================================="
@@ -1159,7 +1197,7 @@ volume_checker_main() {
         mapfile -t volumes < <($SUDO_CMD docker volume ls --format "{{.Name}}")
         if [ ${#volumes[@]} -eq 0 ]; then echo -e "${C_RED}No Docker volumes found.${C_RESET}"; sleep 2; return; fi
         echo -e "${C_BLUE}Volume list:${C_RESET}"
-        PS3=$'\n'"${C_YELLOW}Enter ${C_BLUE}volume No${C_YELLOW}; ${C_GRAY}(r)eturn ${C_YELLOW}or ${C_RED}(q)uit${C_RESET}: "; select volume_name in "${volumes[@]}"; do
+        PS3=$'\n'"${C_YELLOW}Enter ${C_BLUE}volume No.${C_YELLOW} ${C_GRAY}(r)eturn ${C_YELLOW}or ${C_RED}(q)uit${C_RESET}: "; select volume_name in "${volumes[@]}"; do
             if [[ "$REPLY" == "r" || "$REPLY" == "R" ]]; then return; fi
             if [[ "$REPLY" == "q" || "$REPLY" == "Q" ]]; then exit 0; fi
             if [[ -n "$volume_name" ]]; then volume_checker_menu "${volume_name}"; break; else echo -e "${C_RED}Invalid selection.${C_RESET}"; fi
@@ -1191,7 +1229,10 @@ _find_project_dir_by_name() {
 }
 
 volume_smart_backup_main() {
-    clear; echo -e "${C_GREEN}Starting Smart Docker Volume Backup...${C_RESET}"; ensure_backup_image
+    clear; echo -e "${C_GREEN}Starting Smart Docker Volume Backup...${C_RESET}"
+
+    # Updated Check
+    ensure_backup_image || return
 
     mapfile -t all_volumes < <($SUDO_CMD docker volume ls --format "{{.Name}}"); local -a filtered_volumes=()
     for volume in "${all_volumes[@]}"; do if [[ ! " ${IGNORED_VOLUMES[*]-} " =~ " ${volume} " ]]; then filtered_volumes+=("$volume"); fi; done
@@ -1482,7 +1523,10 @@ volume_smart_backup_main() {
 }
 
 volume_restore_main() {
-    clear; echo -e "${C_GREEN}Starting Docker Volume Restore...${C_RESET}"; ensure_backup_image
+    clear; echo -e "${C_GREEN}Starting Docker Volume Restore...${C_RESET}"
+
+    # Updated Check
+    ensure_backup_image || return
     
     mapfile -t backup_files < <(find "$RESTORE_LOCATION" -type f \( -name "*.tar.zst" -o -name "*.tar.gz" \) 2>/dev/null | sort)
     if [ ${#backup_files[@]} -eq 0 ]; then echo -e "${C_RED}No backup files (.tar.zst, .tar.gz) found in or under ${RESTORE_LOCATION}${C_RESET}"; sleep 3; return; fi
