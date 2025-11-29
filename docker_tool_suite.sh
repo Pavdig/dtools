@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # ======================================================================================
 
-SCRIPT_VERSION=v1.4.5
+SCRIPT_VERSION=v1.4.6
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -362,7 +362,7 @@ initial_setup() {
     EXPLORE_IMAGE=${exp_img:-$explore_image_def}
 
     local -a selected_ignored_volumes=()
-    read -p $'\n'"Do you want to configure ignored volumes now? (y/N): " config_vols
+    read -p $'\n'"${C_YELLOW}Do you want to configure ignored volumes now? (${C_GREEN}y${C_YELLOW}/${C_RED}N${C_YELLOW})${C_RESET}: " config_vols
     if [[ "${config_vols,,}" =~ ^(y|Y|yes|YES)$ ]]; then
         mapfile -t all_volumes < <(docker volume ls --format "{{.Name}}" | sort)
         interactive_list_builder "Select Volumes to IGNORE during backup" all_volumes selected_ignored_volumes
@@ -375,7 +375,7 @@ initial_setup() {
         interactive_list_builder "Select Images to IGNORE during updates" all_images selected_ignored_images
     fi
 
-    echo -e "\n${C_YELLOW}--- Secure Archive Settings (Optional) ---${C_RESET}"
+    echo -e "\n${C_YELLOW}--- Secure Archive Settings ---${C_RESET}"
     local rar_pass_1 rar_pass_2 ENCRYPTED_RAR_PASSWORD=""
 
     while true; do
