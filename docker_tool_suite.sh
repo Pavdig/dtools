@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # ======================================================================================
 
-SCRIPT_VERSION=v1.4.8.5
+SCRIPT_VERSION=v1.4.8.6
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -1393,12 +1393,51 @@ volume_smart_backup_main() {
         done
     fi
 
-    local archive_name="Apps-backup[$(date +'%d.%m.%Y')].rar"
-    local archive_path="$(dirname "$backup_dir")/${archive_name}"
+    # --- Archive Naming Logic ---
+    local current_date=$(date +'%d.%m.%Y')
+    local archive_name=""
     
-    # Check for .rar OR .part1.rar (split archive)
+    echo -e "\n${C_YELLOW}--- Archive Naming ---${C_RESET}"
+    echo "  1) Default      : Apps-backup[${current_date}].rar"
+    echo "  2) Semi-Default : Apps-backup(TAG)[${current_date}].rar"
+    echo "  3) Custom Name  : (User defined)"
+    echo "  4) Precision    : Apps-backup[${current_date}_HH-MM-SS].rar"
+    
+    read -p "${C_YELLOW}Select naming convention [${C_RESET}1${C_YELLOW}-${C_RESET}4${C_YELLOW}]: ${C_RESET}" name_choice
+
+    case "$name_choice" in
+        2)
+            read -p "Enter tag name (e.g., 'Plex' or 'Databases'): " tag_name
+            # Sanitization: Replace slashes with dashes to prevent path errors
+            tag_name="${tag_name//\//-}" 
+            archive_name="Apps-backup(${tag_name})[${current_date}].rar"
+            ;;
+        3)
+            read -p "Enter full filename: " custom_name
+            # Sanitization: Replace slashes with dashes
+            custom_name="${custom_name//\//-}"
+            # Ensure the name ends with .rar
+            if [[ "${custom_name}" != *.rar ]]; then custom_name="${custom_name}.rar"; fi
+            archive_name="$custom_name"
+            ;;
+        4)
+            # Useful for multiple backups in the same day
+            archive_name="Apps-backup[$(date +'%d.%m.%Y_%H-%M-%S')].rar"
+            ;;
+        *) 
+            # Default (Option 1 or Enter)
+            archive_name="Apps-backup[${current_date}].rar"
+            ;;
+    esac
+
+    local archive_path="$(dirname "$backup_dir")/${archive_name}"
+
+    # --- Duplicate Check ---
+    # If file exists, append a timestamp to prevent overwriting unless Option 4 was chosen (which is already unique)
     if [[ -f "$archive_path" ]] || [[ -f "${archive_path%.rar}.part1.rar" ]]; then
-        archive_name="Apps-backup[$(date +'%d.%m.%Y_%H-%M-%S')].rar"
+        echo -e "${C_YELLOW}File '${archive_name}' already exists. Appending timestamp...${C_RESET}"
+        # We strip the .rar extension, add timestamp, and put .rar back
+        archive_name="${archive_name%.rar}_$(date +'%H%M%S').rar"
         archive_path="$(dirname "$backup_dir")/${archive_name}"
     fi
 
