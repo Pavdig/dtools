@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # ======================================================================================
 
-SCRIPT_VERSION=v1.4.8.1
+SCRIPT_VERSION=v1.4.8.5
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -646,34 +646,42 @@ _update_app_task() {
             for image in "${images_to_pull[@]}"; do
                 log "Checking image: $image" "   -> Checking ${C_CYAN}${image}${C_RESET}..."
                 
-                # 1. Capture Image ID BEFORE the pull
+                # 1. Capture Image ID BEFORE
                 local id_before
                 id_before=$($SUDO_CMD docker inspect --format='{{.Id}}' "$image" 2>/dev/null || echo "not_found")
 
-                # --- Record History ---
-                _record_image_state "$app_dir" "$image" "$id_before"
-                # ---------------------------
-
-                # 2. Perform the pull
-                local pull_output; pull_output=$($SUDO_CMD docker pull "$image" 2>&1)
-                local pull_exit_code=$?
-                echo "$pull_output" >> "${LOG_FILE:-/dev/null}"
+                local id_after
                 
-                if [ "$pull_exit_code" -ne 0 ]; then
-                    log "ERROR: Failed to pull image $image" "${C_LIGHT_RED}Failed to pull ${image}. See log for details.${C_RESET}"
-                    all_pulls_succeeded=false
+                if $DRY_RUN; then
+                    # --- DRY RUN SAFETY ---
+                    echo -e "      ${C_GRAY}[DRY RUN] Would pull: $image${C_RESET}"
+                    # We simulate 'no change' to avoid misleading 'Restarting...' messages in the log
+                    id_after="$id_before"
                 else
-                    # 3. Capture Image ID AFTER the pull
-                    local id_after
-                    id_after=$($SUDO_CMD docker inspect --format='{{.Id}}' "$image" 2>/dev/null)
+                    # --- REAL EXECUTION ---
+                    _record_image_state "$app_dir" "$image" "$id_before"
 
-                    # 4. Compare IDs
-                    if [[ "$id_before" != "$id_after" ]] || [[ "$id_before" == "not_found" ]]; then
-                        log "New image found for $image (Hash changed)." "   -> ${C_GREEN}Newer image downloaded!${C_RESET}"
-                        update_was_found=true
-                    else
-                        log "Image $image is up to date."
+                    # 2. Perform the pull
+                    local pull_output; pull_output=$($SUDO_CMD docker pull "$image" 2>&1)
+                    local pull_exit_code=$?
+                    echo "$pull_output" >> "${LOG_FILE:-/dev/null}"
+                    
+                    if [ "$pull_exit_code" -ne 0 ]; then
+                        log "ERROR: Failed to pull image $image" "${C_LIGHT_RED}Failed to pull ${image}. See log for details.${C_RESET}"
+                        all_pulls_succeeded=false
+                        continue
                     fi
+                    
+                    # 3. Capture Image ID AFTER
+                    id_after=$($SUDO_CMD docker inspect --format='{{.Id}}' "$image" 2>/dev/null)
+                fi
+
+                # 4. Compare IDs
+                if [[ "$id_before" != "$id_after" ]] && [[ "$id_before" != "not_found" ]]; then
+                    log "New image found for $image (Hash changed)." "   -> ${C_GREEN}Newer image downloaded!${C_RESET}"
+                    update_was_found=true
+                else
+                    log "Image $image is up to date."
                 fi
             done
         fi
@@ -2121,43 +2129,95 @@ main_menu() {
 # --- Argument Parsing at script entry ---
 if [[ $# -gt 0 ]]; then
     if [[ ! -f "$CONFIG_FILE" ]]; then echo -e "${C_RED}Config not found. Please run with 'sudo' for initial setup.${C_RESET}"; exit 1; fi
+    case "$1" in
+        --help|-h)
+            echo -e "${C_RESET}=============================================="
+            echo -e " ${C_GREEN}Docker Tool Suite ${C_CYAN}${SCRIPT_VERSION}${C_RESET} - Help Menu"
+            echo -e "${C_RESET}=============================================="
+            echo -e " ${C_YELLOW}Description:${C_RESET}"
+            echo -e "   A self-hosted CLI tool to manage Docker Compose stacks,"
+            echo -e "   volumes, backups, logs, and automated updates."
+            echo
+            echo -e " ${C_YELLOW}Usage:${C_RESET}"
+            echo -e "   ${C_CYAN}./$(basename "$0") ${C_GREEN}[command] ${C_GRAY}[options]${C_RESET}"
+            echo
+            echo -e " ${C_YELLOW}Commands:${C_RESET}"
+            echo -e "   ${C_GREEN}(no args)${C_RESET}       Launch the interactive TUI menu."
+            echo -e "   ${C_GREEN}update${C_RESET}          Update all running compose applications."
+            echo -e "   ${C_GREEN}update-unused${C_RESET}   Update unused images and prune dangling ones."
+            echo -e "   ${C_GREEN}--help${C_RESET}          Show this help message."
+            echo
+            echo -e " ${C_YELLOW}Options (for updates):${C_RESET}"
+            echo -e "   ${C_GREEN}--cron${C_RESET}          Optimized for scheduled tasks (logs to file)."
+            echo -e "   ${C_GREEN}--dry-run${C_RESET}       Simulate actions without making changes."
+            echo -e "${C_RESET}==============================================${C_RESET}"
+            exit 0 ;;
+    esac
+
+    # Source config after help check so help works without config
     source "$CONFIG_FILE"
     prune_old_logs
+    
     case "$1" in
         update)
             shift
-            if [[ "${1:-}" == "--cron" ]]; then
-                IS_CRON_RUN=true
-                # Enable merged logging
-                _enable_cron_logging "${LOG_SUBDIR_UPDATE:-apps-update-logs}" "dtools-au"
-                
-                [[ "${2:-}" == "--dry-run" ]] && DRY_RUN=true
+            log_prefix="dtools-au"
+            
+            # Parse arguments
+            while (( "$#" )); do
+              case "$1" in
+                --dry-run) DRY_RUN=true; shift ;;
+                --cron) IS_CRON_RUN=true; shift ;;
+                *) echo "Unknown option: $1"; exit 1 ;;
+              esac
+            done
+
+            # Apply dry-run suffix regardless of cron status
+            if [ "$DRY_RUN" = true ]; then log_prefix="${log_prefix}-dry-run"; fi
+
+            if [ "$IS_CRON_RUN" = true ]; then
+                _enable_cron_logging "${LOG_SUBDIR_UPDATE:-apps-update-logs}" "$log_prefix"
             else
-                [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=true
+                # For manual runs, we set LOG_FILE so the log() function works
+                # but we DO NOT redirect stdout/stderr, so user sees progress on screen.
+                log_dir="${LOG_DIR}/${LOG_SUBDIR_UPDATE:-apps-update-logs}"
+                mkdir -p "$log_dir"
+                LOG_FILE="${log_dir}/${log_prefix}-$(date +'%Y-%m-%d').log"
+                echo -e "${C_GRAY}Logging output to: $LOG_FILE${C_RESET}"
             fi
+            
             app_manager_update_all_known_apps
             exit 0 ;;
         update-unused)
             shift 
+            log_prefix="dtools-uil"
+            
             while (( "$#" )); do
               case "$1" in
                 --dry-run) DRY_RUN=true; shift ;;
-                --cron) 
-                    IS_CRON_RUN=true
-                    # Enable merged logging
-                    _enable_cron_logging "${LOG_SUBDIR_UNUSED:-unused-images-update-logs}" "dtools-uil"
-                    shift ;;
+                --cron) IS_CRON_RUN=true; shift ;;
                 *) echo "Unknown option: $1"; exit 1 ;;
               esac
             done
+            
+            if [ "$DRY_RUN" = true ]; then log_prefix="${log_prefix}-dry-run"; fi
+
+            if [ "$IS_CRON_RUN" = true ]; then
+                _enable_cron_logging "${LOG_SUBDIR_UNUSED:-unused-images-update-logs}" "$log_prefix"
+            else
+                log_dir="${LOG_DIR}/${LOG_SUBDIR_UNUSED:-unused-images-update-logs}"
+                mkdir -p "$log_dir"
+                LOG_FILE="${log_dir}/${log_prefix}-$(date +'%Y-%m-%d').log"
+                echo -e "${C_GRAY}Logging output to: $LOG_FILE${C_RESET}"
+            fi
+            
             update_unused_images_main
             exit 0 ;;
-        *) echo "Unknown command: $1"; echo "Usage: $0 [update|update-unused|--help]"; exit 1 ;;
+        *) 
+            echo -e "${C_RED}Unknown command: $1${C_RESET}"
+            echo -e "Try ${C_YELLOW}$0 --help${C_RESET} for more information."
+            exit 1 ;;
     esac
-fi
-
-if [[ ! -f "$CONFIG_FILE" ]]; then
-    initial_setup
 fi
 
 source "$CONFIG_FILE"
