@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # ======================================================================================
 
-SCRIPT_VERSION=v1.4.4
+SCRIPT_VERSION=v1.4.4.1
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -49,7 +49,7 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # --- Unified Configuration Paths ---
-CONFIG_DIR="/home/${CURRENT_USER}/.config/docker_tool_suite"
+CONFIG_DIR="/home/${CURRENT_USER}/.config/dtools"
 CONFIG_FILE="${CONFIG_DIR}/config.conf"
 
 # --- SHARED UI FUNCTION ---
@@ -294,7 +294,7 @@ initial_setup() {
     local managed_subdir_def="managed_stacks"
     local backup_path_def="/home/${CURRENT_USER}/backups/docker-volume-backups"
     local restore_path_def="/home/${CURRENT_USER}/backups/docker-volume-restore-dir"
-    local log_dir_def="/home/${CURRENT_USER}/logs/docker_tool_suite"
+    local log_dir_def="/home/${CURRENT_USER}/logs/dtools"
     local log_retention_def="30"
     
     echo -e "-----------------------------------------------------\n"
