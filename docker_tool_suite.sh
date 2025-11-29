@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # ======================================================================================
 
-SCRIPT_VERSION=v1.4.8
+SCRIPT_VERSION=v1.4.8.1
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -15,11 +15,12 @@ IS_CRON_RUN=false
 # ======================================================================================
 
 # --- Cosmetics ---
-C_RED=$'\e[31m'
-C_BOLD_RED=$'\e[1;31m'
-C_GREEN=$'\e[32m'
-C_YELLOW=$'\e[33m'
-C_BLUE=$'\e[34m'
+# Source: https://gkarthiks.github.io/quick-commands-cheat-sheet/bash_command.html
+C_RED=$'\e[0;31m'
+C_LIGHT_RED=$'\e[1;31m'
+C_GREEN=$'\e[0;32m'
+C_YELLOW=$'\e[1;33m'
+C_CYAN=$'\e[0;36m'
 C_GRAY=$'\e[90m'
 C_RESET=$'\e[0m'
 TICKMARK=$'\e[32m\xE2\x9C\x93' # GREEN ✓
@@ -67,7 +68,7 @@ print_standard_menu() {
     echo -e " ${C_YELLOW}Options: "
     # Loop through the passed options array
     for i in "${!_menu_options[@]}"; do
-        echo -e " ${C_BLUE}$((i+1))${C_YELLOW}) ${C_RESET}${_menu_options[$i]}"
+        echo -e " ${C_CYAN}$((i+1))${C_YELLOW}) ${C_RESET}${_menu_options[$i]}"
     done
     
     echo -e "${C_RESET}----------------------------------------------"
@@ -275,7 +276,7 @@ show_selection_menu() {
             if ${selected_status_ref[$i]}; then echo -e " $((i+1)). ${C_GREEN}[x]${C_RESET} ${all_items_ref[$i]}"; else echo -e " $((i+1)). ${C_RED}[ ]${C_RESET} ${all_items_ref[$i]}"; fi
         done
         echo "-----------------------------------------------------"
-        echo -e "Enter a (${C_GREEN}No.${C_RESET}) to toggle, ${C_BLUE}(a)ll${C_RESET}, ${C_YELLOW}(${action_verb}) ${C_RESET}to ${C_YELLOW}${action_verb}${C_RESET}, ${C_GRAY}(r)eturn ${C_RESET}or ${C_RED}(q)uit${C_RESET}."
+        echo -e "Enter a (${C_GREEN}No.${C_RESET}) to toggle, ${C_CYAN}(a)ll${C_RESET}, ${C_YELLOW}(${action_verb}) ${C_RESET}to ${C_YELLOW}${action_verb}${C_RESET}, ${C_GRAY}(r)eturn ${C_RESET}or ${C_RED}(q)uit${C_RESET}."
         read -rp "Your choice: " choice
         case "$choice" in
             "${action_verb}")
@@ -320,7 +321,7 @@ initial_setup() {
     if [[ $EUID -ne 0 ]]; then echo -e "${C_RED}Initial setup must be run with 'sudo ./docker_tool_suite.sh'. Exiting.${C_RESET}"; exit 1; fi
     clear
     echo -e "${C_RESET}================================================"
-    echo -e "${C_GREEN} Welcome to the ${C_BLUE}Docker Tool Suite ${SCRIPT_VERSION} ${C_GREEN}Setup!"
+    echo -e "${C_GREEN} Welcome to the ${C_CYAN}Docker Tool Suite ${SCRIPT_VERSION} ${C_GREEN}Setup!"
     echo -e "${C_RESET}================================================\n"
     echo -e "${C_YELLOW}This one-time setup will configure all modules.\n"
     echo -e "${C_RESET}Settings will be saved to: ${C_GREEN}${CONFIG_FILE}${C_RESET}\n"
@@ -390,7 +391,7 @@ initial_setup() {
                 ENCRYPTED_RAR_PASSWORD=""
                 break
             else
-                echo -e "${C_BLUE}-> Please enter a password then.${C_RESET}"
+                echo -e "${C_CYAN}-> Please enter a password then.${C_RESET}"
                 continue
             fi
         fi
@@ -589,7 +590,7 @@ _start_app_task() {
         log "Successfully started '$app_name'."
     else
         log "ERROR: Failed to pull images for '$app_name'. Aborting start."
-        echo -e "${C_BOLD_RED}Failed to pull images for '$app_name'. Check log for details.${C_RESET}"
+        echo -e "${C_LIGHT_RED}Failed to pull images for '$app_name'. Check log for details.${C_RESET}"
     fi
 }
 
@@ -643,7 +644,7 @@ _update_app_task() {
         if [ ${#images_to_pull[@]} -gt 0 ]; then
             echo -e "Pulling latest versions for non-ignored images in ${C_YELLOW}${app_name}${C_RESET}..."
             for image in "${images_to_pull[@]}"; do
-                log "Checking image: $image" "   -> Checking ${C_BLUE}${image}${C_RESET}..."
+                log "Checking image: $image" "   -> Checking ${C_CYAN}${image}${C_RESET}..."
                 
                 # 1. Capture Image ID BEFORE the pull
                 local id_before
@@ -659,7 +660,7 @@ _update_app_task() {
                 echo "$pull_output" >> "${LOG_FILE:-/dev/null}"
                 
                 if [ "$pull_exit_code" -ne 0 ]; then
-                    log "ERROR: Failed to pull image $image" "${C_BOLD_RED}Failed to pull ${image}. See log for details.${C_RESET}"
+                    log "ERROR: Failed to pull image $image" "${C_LIGHT_RED}Failed to pull ${image}. See log for details.${C_RESET}"
                     all_pulls_succeeded=false
                 else
                     # 3. Capture Image ID AFTER the pull
@@ -707,7 +708,7 @@ _update_app_task() {
         fi
     else
         log "ERROR: Failed to pull images for '$app_name'. Aborting."
-        echo -e "${C_BOLD_RED}Update for '$app_name' aborted due to pull failures.${C_RESET}"
+        echo -e "${C_LIGHT_RED}Update for '$app_name' aborted due to pull failures.${C_RESET}"
     fi
 }
 
@@ -774,7 +775,7 @@ _rollback_app_task() {
         local selected_line="${valid_choices[$((choice-1))]}"
         IFS='|' read -r r_time r_name r_id <<< "$selected_line"
 
-        echo -e "\n${C_BOLD_RED}WARNING: This will force '${r_name}' to point to ID '${r_id:7:12}' locally.${C_RESET}"
+        echo -e "\n${C_LIGHT_RED}WARNING: This will force '${r_name}' to point to ID '${r_id:7:12}' locally.${C_RESET}"
         read -p "Are you sure? (y/N): " confirm
         if [[ "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then
             log "Rolling back $app_name image $r_name to $r_id..."
@@ -803,7 +804,7 @@ _rollback_app_task() {
 }
 
 app_manager_status() {
-    clear; log "Generating App Status Overview" "${C_BLUE}Displaying App Status Overview...${C_RESET}"
+    clear; log "Generating App Status Overview" "${C_CYAN}Displaying App Status Overview...${C_RESET}"
     local less_prompt="(Scroll with arrow keys, press 'q' to return)"
     (
         declare -A running_projects
@@ -941,7 +942,7 @@ app_manager_interactive_handler() {
         
         if [[ "$action" != "rollback" ]]; then
             log "All selected ${app_type_name} app processes for '$action' finished."
-            echo -e "\n${C_BLUE}Task complete. Press Enter...${C_RESET}"; read -r
+            echo -e "\n${C_CYAN}Task complete. Press Enter...${C_RESET}"; read -r
         fi
     done
 }
@@ -973,7 +974,7 @@ app_manager_update_all_known_apps() {
     for app in "${essential_apps[@]}"; do
         if [[ "$app" != "$MANAGED_SUBDIR" ]]; then
             if [[ -v running_projects[$app] ]]; then
-                echo -e "\n${C_BLUE}--- Updating RUNNING Essential App: ${C_YELLOW}${app}${C_BLUE} ---${C_RESET}"
+                echo -e "\n${C_CYAN}--- Updating RUNNING Essential App: ${C_YELLOW}${app}${C_CYAN} ---${C_RESET}"
                 _update_app_task "$app" "$APPS_BASE_PATH/$app"
             else
                 log "Skipping update for stopped essential app: $app"
@@ -983,7 +984,7 @@ app_manager_update_all_known_apps() {
 
     for app in "${managed_apps[@]}"; do
         if [[ -v running_projects[$app] ]]; then
-            echo -e "\n${C_BLUE}--- Updating RUNNING Managed App: ${C_YELLOW}${app}${C_BLUE} ---${C_RESET}"
+            echo -e "\n${C_CYAN}--- Updating RUNNING Managed App: ${C_YELLOW}${app}${C_CYAN} ---${C_RESET}"
             _update_app_task "$app" "$APPS_BASE_PATH/$MANAGED_SUBDIR/$app"
         else
             log "Skipping update for stopped managed app: $app"
@@ -1022,13 +1023,13 @@ app_manager_menu() {
             2) app_manager_interactive_handler "Essential" "$APPS_BASE_PATH" "$APPS_BASE_PATH" ;;
             3) app_manager_interactive_handler "Managed" "$APPS_BASE_PATH/$MANAGED_SUBDIR" "$APPS_BASE_PATH/$MANAGED_SUBDIR" ;;
             4) 
-                read -rp "$(printf "\n${C_BOLD_RED}This will stop ALL running compose applications. Are you sure? [y/N]: ${C_RESET}")" confirm
+                read -rp "$(printf "\n${C_LIGHT_RED}This will stop ALL running compose applications. Are you sure? [y/N]: ${C_RESET}")" confirm
                 if [[ "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then
                     app_manager_stop_all
                 else
                     echo -e "\n${C_YELLOW}Operation canceled.${C_RESET}"
                 fi
-                echo -e "\n${C_BLUE}Task complete. Press Enter...${C_RESET}"; read -r
+                echo -e "\n${C_CYAN}Task complete. Press Enter...${C_RESET}"; read -r
                 ;;
             [rR]) return ;;
             [qQ]) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
@@ -1052,7 +1053,7 @@ ensure_backup_image() {
                 return 1
             fi
         else
-            echo -e "${C_YELLOW}The required helper image (${C_BLUE}${BACKUP_IMAGE}${C_YELLOW}) is missing.${C_RESET}"
+            echo -e "${C_YELLOW}The required helper image (${C_CYAN}${BACKUP_IMAGE}${C_YELLOW}) is missing.${C_RESET}"
             read -p "Download it now? (y/N): " confirm_dl
             if [[ "${confirm_dl,,}" =~ ^(y|Y|yes|YES)$ ]]; then
                 echo -e "-> Pulling image..."
@@ -1076,7 +1077,7 @@ ensure_explore_image() {
              # Unlikely to use explorer in cron, but good safety
              if ! execute_and_log $SUDO_CMD docker pull "${EXPLORE_IMAGE}"; then return 1; fi
         else
-            echo -e "${C_YELLOW}The required explorer image (${C_BLUE}${EXPLORE_IMAGE}${C_YELLOW}) is missing.${C_RESET}"
+            echo -e "${C_YELLOW}The required explorer image (${C_CYAN}${EXPLORE_IMAGE}${C_YELLOW}) is missing.${C_RESET}"
             read -p "Download it now? (y/N): " confirm_dl
             if [[ "${confirm_dl,,}" =~ ^(y|Y|yes|YES)$ ]]; then
                 echo -e "-> Pulling image..."
@@ -1097,17 +1098,17 @@ run_in_volume() { local volume_name="$1"; shift; $SUDO_CMD docker run --rm -v "$
 
 volume_checker_inspect() {
     local volume_name="$1"
-    echo -e "\n${C_BLUE}--- Inspecting '${volume_name}' ---${C_RESET}"; $SUDO_CMD docker volume inspect "${volume_name}"
+    echo -e "\n${C_CYAN}--- Inspecting '${volume_name}' ---${C_RESET}"; $SUDO_CMD docker volume inspect "${volume_name}"
 }
 
 volume_checker_list_files() {
     local volume_name="$1"
-    echo -e "\n${C_BLUE}--- Listing files in '${volume_name}' ---${C_RESET}"; run_in_volume "${volume_name}" ls -lah /volume
+    echo -e "\n${C_CYAN}--- Listing files in '${volume_name}' ---${C_RESET}"; run_in_volume "${volume_name}" ls -lah /volume
 }
 
 volume_checker_calculate_size() {
     local volume_name="$1"
-    echo -e "\n${C_BLUE}--- Calculating total size of '${volume_name}' ---${C_RESET}"; run_in_volume "${volume_name}" du -sh /volume
+    echo -e "\n${C_CYAN}--- Calculating total size of '${volume_name}' ---${C_RESET}"; run_in_volume "${volume_name}" du -sh /volume
 }
 
 volume_checker_explore() {
@@ -1122,9 +1123,9 @@ volume_checker_explore() {
     echo -e "${C_RESET}=============================================="
     echo -e "          ${C_GREEN}Docker Tool Suite ${SCRIPT_VERSION}"
     echo -e "${C_RESET}=============================================="
-    echo -e "${C_BLUE}           --- Interactive Shell ---${C_RESET}"
+    echo -e "${C_CYAN}           --- Interactive Shell ---${C_RESET}"
     echo -e "${C_RESET}----------------------------------------------\n"
-    echo -e "${C_YELLOW}The volume ${C_BLUE}${volume_name} ${C_YELLOW}is mounted read-write at ${C_BLUE}/volume${C_YELLOW}."
+    echo -e "${C_YELLOW}The volume ${C_CYAN}${volume_name} ${C_YELLOW}is mounted read-write at ${C_CYAN}/volume${C_YELLOW}."
     echo -e "${C_YELLOW}Type ${C_GREEN}'exit' ${C_YELLOW}or press ${C_GREEN}Ctrl+D ${C_YELLOW}to return.${C_RESET}\n"
 
     # We use \\\[ and \\\] to correctly escape color codes for Readline, fixing the line-wrap visual glitches.
@@ -1135,13 +1136,13 @@ volume_checker_explore() {
         -w /volume \
         "${EXPLORE_IMAGE}" \
         bash -c "echo -e \"alias ll='ls -lah --color=auto'\" >> ~/.bashrc; \
-                 echo -e \"export PS1='\\\\[${C_RESET}\\\\][\\\\[${C_GREEN}\\\\]VOL-EXPLORER\\\\[${C_RESET}\\\\]@\\\\[${C_BLUE}\\\\]${short_name}\\\\[${C_RESET}\\\\]:\\\\[${C_GREEN}\\\\]\w\\\\[${C_RESET}\\\\]] \\\\[${C_GREEN}\\\\]# \\\\[${C_RESET}\\\\] '\" >> ~/.bashrc; \
+                 echo -e \"export PS1='\\\\[${C_RESET}\\\\][\\\\[${C_GREEN}\\\\]VOL-EXPLORER\\\\[${C_RESET}\\\\]@\\\\[${C_CYAN}\\\\]${short_name}\\\\[${C_RESET}\\\\]:\\\\[${C_GREEN}\\\\]\w\\\\[${C_RESET}\\\\]] \\\\[${C_GREEN}\\\\]# \\\\[${C_RESET}\\\\] '\" >> ~/.bashrc; \
                  exec bash" || true
 }
 
 volume_checker_remove() {
     local volume_name="$1"
-    read -rp "$(printf "\n${C_YELLOW}Permanently delete volume '${C_BLUE}%s${C_YELLOW}'? [y/N]: ${C_RESET}" "${volume_name}")" confirm
+    read -rp "$(printf "\n${C_YELLOW}Permanently delete volume '${C_CYAN}%s${C_YELLOW}'? [y/N]: ${C_RESET}" "${volume_name}")" confirm
     if [[ "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then
         echo -e "-> Deleting volume '${volume_name}'..."
         if execute_and_log $SUDO_CMD docker volume rm "${volume_name}"; then echo -e "${C_GREEN}Volume successfully deleted.${C_RESET}"; sleep 2; return 0; else echo -e "${C_RED}Error: Failed to delete. It might be in use.${C_RESET}"; sleep 3; return 1; fi
@@ -1155,8 +1156,8 @@ volume_checker_menu() {
         local options=(
             "${C_YELLOW}List volume files${C_RESET}"
             "${C_YELLOW}Calculate volume size${C_RESET}"
-            "${C_BLUE}Explore volume in shell${C_RESET}"
-            "${C_BOLD_RED}Remove volume${C_RESET}"
+            "${C_CYAN}Explore volume in shell${C_RESET}"
+            "${C_LIGHT_RED}Remove volume${C_RESET}"
             "${C_GRAY}Return to volume list${C_RESET}"
             "${C_RED}Quit${C_RESET}"
         )
@@ -1165,19 +1166,19 @@ volume_checker_menu() {
                 "${C_YELLOW}List volume files${C_RESET}")
                     ensure_backup_image || break
                     volume_checker_list_files "${volume_name}"
-                    echo -e "\n${C_BLUE}Action complete. Press Enter to return to menu...${C_RESET}"; read -r
+                    echo -e "\n${C_CYAN}Action complete. Press Enter to return to menu...${C_RESET}"; read -r
                     break
                     ;;
                 "${C_YELLOW}Calculate volume size${C_RESET}")
                     ensure_backup_image || break
                     volume_checker_calculate_size "${volume_name}"
-                    echo -e "\n${C_BLUE}Action complete. Press Enter to return to menu...${C_RESET}"; read -r
+                    echo -e "\n${C_CYAN}Action complete. Press Enter to return to menu...${C_RESET}"; read -r
                     break
                     ;;
-                "${C_BLUE}Explore volume in shell${C_RESET}") 
+                "${C_CYAN}Explore volume in shell${C_RESET}") 
                     ensure_explore_image || break
                     volume_checker_explore "${volume_name}"; break ;;
-                "${C_BOLD_RED}Remove volume${C_RESET}") if volume_checker_remove "${volume_name}"; then return; fi; break ;;
+                "${C_LIGHT_RED}Remove volume${C_RESET}") if volume_checker_remove "${volume_name}"; then return; fi; break ;;
                 "${C_GRAY}Return to volume list${C_RESET}") return ;;
                 "${C_RED}Quit${C_RESET}") exit 0 ;;
                 *) echo -e "${C_RED}Invalid option '$REPLY'${C_RESET}"; sleep 1; break ;;
@@ -1192,12 +1193,12 @@ volume_checker_main() {
         echo -e "${C_RESET}=============================================="
         echo -e "          ${C_GREEN}Docker Tool Suite ${SCRIPT_VERSION}"
         echo -e "${C_RESET}=============================================="
-        echo -e "           ${C_BLUE}--- Inspect & Manage Volumes ---"
+        echo -e "           ${C_CYAN}--- Inspect & Manage Volumes ---"
         echo -e "${C_RESET}----------------------------------------------\n"
         mapfile -t volumes < <($SUDO_CMD docker volume ls --format "{{.Name}}")
         if [ ${#volumes[@]} -eq 0 ]; then echo -e "${C_RED}No Docker volumes found.${C_RESET}"; sleep 2; return; fi
-        echo -e "${C_BLUE}Volume list:${C_RESET}"
-        PS3=$'\n'"${C_YELLOW}Enter ${C_BLUE}volume No.${C_YELLOW} ${C_GRAY}(r)eturn ${C_YELLOW}or ${C_RED}(q)uit${C_RESET}: "; select volume_name in "${volumes[@]}"; do
+        echo -e "${C_CYAN}Volume list:${C_RESET}"
+        PS3=$'\n'"${C_YELLOW}Enter ${C_CYAN}volume No.${C_YELLOW} ${C_GRAY}(r)eturn ${C_YELLOW}or ${C_RED}(q)uit${C_RESET}: "; select volume_name in "${volumes[@]}"; do
             if [[ "$REPLY" == "r" || "$REPLY" == "R" ]]; then return; fi
             if [[ "$REPLY" == "q" || "$REPLY" == "Q" ]]; then exit 0; fi
             if [[ -n "$volume_name" ]]; then volume_checker_menu "${volume_name}"; break; else echo -e "${C_RED}Invalid selection.${C_RESET}"; fi
@@ -1260,7 +1261,7 @@ volume_smart_backup_main() {
             if [[ -n "$project_name" ]]; then
                 app_volumes_map["$project_name"]+="${volume} "
                 if [[ ! -v "app_dir_map[$project_name]" ]]; then
-                    echo " -> Found application for volume '${volume}': ${C_BLUE}${project_name}${C_RESET}"
+                    echo " -> Found application for volume '${volume}': ${C_CYAN}${project_name}${C_RESET}"
                     local found_dir
                     found_dir=$(_find_project_dir_by_name "$project_name")
                     if [[ -n "$found_dir" ]]; then
@@ -1273,11 +1274,11 @@ volume_smart_backup_main() {
                     fi
                 fi
             else
-                echo -e " -> Volume '${C_BLUE}${volume}${C_RESET}' is non-compose. Backing up as standalone."
+                echo -e " -> Volume '${C_CYAN}${volume}${C_RESET}' is non-compose. Backing up as standalone."
                 standalone_volumes+=("$volume")
             fi
         else
-            echo -e " -> Volume '${C_BLUE}${volume}${C_RESET}' is standalone."
+            echo -e " -> Volume '${C_CYAN}${volume}${C_RESET}' is standalone."
             standalone_volumes+=("$volume")
         fi
     done
@@ -1288,13 +1289,13 @@ volume_smart_backup_main() {
     if [ -n "${!app_volumes_map[*]}" ]; then
         echo -e "\n${C_GREEN}--- Processing Application-Linked Backups ---${C_RESET}"
         for app_name in "${!app_volumes_map[@]}"; do
-            echo -e "\n${C_YELLOW}Processing app: ${C_BLUE}${app_name}${C_RESET}"
+            echo -e "\n${C_YELLOW}Processing app: ${C_CYAN}${app_name}${C_RESET}"
             local app_dir=${app_dir_map[$app_name]}
             _stop_app_task "$app_name" "$app_dir"
             local -a vols_to_backup; read -r -a vols_to_backup <<< "${app_volumes_map[$app_name]}"
             echo "   -> Backing up ${#vols_to_backup[@]} volume(s)..."
             for volume in "${vols_to_backup[@]}"; do
-                echo "      - Backing up ${C_BLUE}${volume}${C_RESET}..."
+                echo "      - Backing up ${C_CYAN}${volume}${C_RESET}..."
                 execute_and_log $SUDO_CMD docker run --rm -v "${volume}:/volume:ro" -v "${backup_dir}:/backup" "${BACKUP_IMAGE}" tar -C /volume --zstd -cvf "/backup/${volume}.tar.zst" .
             done
             _start_app_task "$app_name" "$app_dir"
@@ -1306,7 +1307,7 @@ volume_smart_backup_main() {
     if [[ ${#standalone_volumes[@]} -gt 0 ]]; then
         echo -e "\n${C_GREEN}--- Processing Standalone Volume Backups ---${C_RESET}"
         for volume in "${standalone_volumes[@]}"; do
-            echo -e "${C_YELLOW}Backing up standalone volume: ${C_BLUE}${volume}${C_RESET}..."
+            echo -e "${C_YELLOW}Backing up standalone volume: ${C_CYAN}${volume}${C_RESET}..."
             execute_and_log $SUDO_CMD docker run --rm -v "${volume}:/volume:ro" -v "${backup_dir}:/backup" "${BACKUP_IMAGE}" tar -C /volume --zstd -cvf "/backup/${volume}.tar.zst" .
         done
     fi
@@ -1318,7 +1319,7 @@ volume_smart_backup_main() {
     # --- Phase 4: Create Secure RAR Archive ---
     local create_rar=""
     while true; do
-        read -p $'\n'"${C_BLUE}Do you want to create a password-protected RAR archive of this backup? (Y/N): ${C_RESET}" create_rar
+        read -p $'\n'"${C_CYAN}Do you want to create a password-protected RAR archive of this backup? (Y/N): ${C_RESET}" create_rar
         case "${create_rar,,}" in
             y|Y|yes|YES) break ;;
             n|N|no|NO)  echo -e "${C_YELLOW}Skipping RAR archive creation.${C_RESET}"; return ;;
@@ -1326,23 +1327,23 @@ volume_smart_backup_main() {
         esac
     done
 
-    if ! command -v rar &>/dev/null; then echo -e "\n${C_BOLD_RED}Error: 'rar' command not found. Cannot create archive.${C_RESET}"; return 1; fi
+    if ! command -v rar &>/dev/null; then echo -e "\n${C_LIGHT_RED}Error: 'rar' command not found. Cannot create archive.${C_RESET}"; return 1; fi
     
     local archive_password=""
     local password_is_set=false
 
     # --- Password Selection Loop ---
     if [[ -n "${ENCRYPTED_RAR_PASSWORD-}" ]]; then
-        echo -e "\n${C_BLUE}A default archive password is configured.${C_RESET}"
+        echo -e "\n${C_CYAN}A default archive password is configured.${C_RESET}"
         while true; do
-            read -p "Choose: ${C_BLUE}(U)se saved${C_RESET}, ${C_YELLOW}(E)nter new${C_RESET}, ${C_GRAY}(N)o password${C_RESET}, ${C_RED}(C)ancel${C_RESET}: " pass_choice
+            read -p "Choose: ${C_CYAN}(U)se saved${C_RESET}, ${C_YELLOW}(E)nter new${C_RESET}, ${C_GRAY}(N)o password${C_RESET}, ${C_RED}(C)ancel${C_RESET}: " pass_choice
             case "${pass_choice,,}" in
                 u|U|use|USE)
                     archive_password=$(decrypt_pass "${ENCRYPTED_RAR_PASSWORD}")
                     if [[ -z "$archive_password" ]]; then
-                        echo -e "${C_BOLD_RED}Error: Decryption failed. Please enter manually.${C_RESET}"
+                        echo -e "${C_LIGHT_RED}Error: Decryption failed. Please enter manually.${C_RESET}"
                     else
-                        echo -e "${C_BLUE}Using saved password.${C_RESET}"
+                        echo -e "${C_CYAN}Using saved password.${C_RESET}"
                         password_is_set=true
                     fi
                     break
@@ -1411,8 +1412,8 @@ volume_smart_backup_main() {
             # Note: 'm' and 'M' in standard RAR command mean different things.
             # 'M' = 1,000,000 bytes (Decimal). 'm' = 1024*1024 bytes (Binary).
             # We use 'm' here to match what the OS displays.
-            2) rar_split_opt="-v4095m"; echo -e "${C_BLUE}-> Splitting at 4GB (FAT32 safe).${C_RESET}"; break ;;
-            3) rar_split_opt="-v8192m"; echo -e "${C_BLUE}-> Splitting at 8GB.${C_RESET}"; break ;;
+            2) rar_split_opt="-v4095m"; echo -e "${C_CYAN}-> Splitting at 4GB (FAT32 safe).${C_RESET}"; break ;;
+            3) rar_split_opt="-v8192m"; echo -e "${C_CYAN}-> Splitting at 8GB.${C_RESET}"; break ;;
             4) 
                 read -p "${C_YELLOW}Enter size (e.g., ${C_RESET}500m ${C_YELLOW}or ${C_RESET}2g${C_YELLOW}): ${C_RESET}" custom_size
                 if [[ "$custom_size" =~ ^[0-9]+[mMgG]$ ]]; then
@@ -1421,7 +1422,7 @@ volume_smart_backup_main() {
                     # which matches "500 MB" in Windows Explorer.
                     local safe_size="${custom_size,,}"
                     rar_split_opt="-v${safe_size}"
-                    echo -e "${C_BLUE}-> Splitting at ${C_GREEN}${safe_size}${C_BLUE} (Binary units).${C_RESET}"
+                    echo -e "${C_CYAN}-> Splitting at ${C_GREEN}${safe_size}${C_CYAN} (Binary units).${C_RESET}"
                     break
                 else
                     echo -e "${C_RED}Invalid format. Use numbers followed by M or G.${C_RESET}"
@@ -1460,9 +1461,9 @@ volume_smart_backup_main() {
         if [[ "$line" =~ (Done|OK|All OK) ]]; then
             echo -e "${C_GREEN}${line}${C_RESET}"
         elif [[ "$line" =~ (Adding|Updating|Creating) ]]; then
-            echo -e "${C_BLUE}${line}${C_RESET}"
+            echo -e "${C_CYAN}${line}${C_RESET}"
         elif [[ "$line" =~ (Error|WARNING|Cannot) ]]; then
-            echo -e "${C_BOLD_RED}${line}${C_RESET}"
+            echo -e "${C_LIGHT_RED}${line}${C_RESET}"
         elif [[ "$line" =~ [0-9]+% ]]; then
             echo -e "${line//%/%${C_RESET}}" 
         else
@@ -1482,7 +1483,7 @@ volume_smart_backup_main() {
         # If the standard .rar doesn't exist, check for a .part1.rar (split archive)
         if [[ ! -f "$file_to_verify" ]] && [[ -f "${archive_path%.rar}.part1.rar" ]]; then
             file_to_verify="${archive_path%.rar}.part1.rar"
-            echo -e "${C_BLUE}Detected split archive. Verifying part 1 sequence...${C_RESET}"
+            echo -e "${C_CYAN}Detected split archive. Verifying part 1 sequence...${C_RESET}"
         fi
 
         # --- Verify the archive integrity ---
@@ -1495,7 +1496,7 @@ volume_smart_backup_main() {
         if "${verify_cmd[@]}" &>/dev/null; then
              echo -e "${C_GREEN}Verification Passed: Archive is healthy.${C_RESET}\n"
         else
-             echo -e "${C_BOLD_RED}Verification FAILED! Do not delete the source files.${C_RESET}\n"
+             echo -e "${C_LIGHT_RED}Verification FAILED! Do not delete the source files.${C_RESET}\n"
              # This prevents the delete prompt from appearing if verification fails
              return 1
         fi
@@ -1518,7 +1519,7 @@ volume_smart_backup_main() {
             esac
         done
     else
-        echo -e "\n${C_BOLD_RED}Error: Failed to create RAR archive.${C_RESET}"
+        echo -e "\n${C_LIGHT_RED}Error: Failed to create RAR archive.${C_RESET}"
     fi
 }
 
@@ -1550,7 +1551,7 @@ volume_restore_main() {
     
     for backup_file in "${selected_files[@]}"; do
         local base_name; base_name=$(basename "$backup_file"); local volume_name="${base_name%%.tar.*}"
-        echo -e "\n${C_YELLOW}Restoring ${C_BLUE}${base_name}${C_RESET} to volume ${C_BLUE}${volume_name}${C_RESET}..."
+        echo -e "\n${C_YELLOW}Restoring ${C_CYAN}${base_name}${C_RESET} to volume ${C_CYAN}${volume_name}${C_RESET}..."
 
         if ! $SUDO_CMD docker volume inspect "$volume_name" &>/dev/null; then
             echo "   -> Volume does not exist. Creating..."
@@ -1609,7 +1610,7 @@ system_prune_main() {
     echo "  - all dangling images"
     echo "  - all build cache"
     echo ""
-    read -rp "$(printf "${C_BOLD_RED}This action is IRREVERSIBLE. Are you sure? [y/N]: ${C_RESET}")" confirm
+    read -rp "$(printf "${C_LIGHT_RED}This action is IRREVERSIBLE. Are you sure? [y/N]: ${C_RESET}")" confirm
     if [[ "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then
         echo -e "\n${C_YELLOW}Pruning system...${C_RESET}"
         execute_and_log $SUDO_CMD docker system prune -af
@@ -1645,7 +1646,7 @@ _log_viewer_select_and_view() {
         echo -e "${C_RESET}=============================================="
         echo -e "          ${C_GREEN}Docker Tool Suite ${SCRIPT_VERSION}"
         echo -e "${C_RESET}=============================================="
-        echo -e "           ${C_BLUE}--- Log Viewer ---"
+        echo -e "           ${C_CYAN}--- Log Viewer ---"
         echo -e "${C_RESET}----------------------------------------------\n"
         echo -e "${C_YELLOW}Select a log file to view:${C_RESET}"
         
@@ -1662,7 +1663,7 @@ _log_viewer_select_and_view() {
             elif [[ -n "$choice" ]]; then
                 local idx=$((REPLY - 1))
                 echo -e "${C_RESET}----------------------------------------------"
-                echo -e "\n${C_BLUE}Opening log ${display_options[$idx]}"
+                echo -e "\n${C_CYAN}Opening log ${display_options[$idx]}"
                 echo -e "${C_RESET}----------------------------------------------\n"
                 echo -e "${C_GREEN}--- Log START ---${C_RESET}"
                 less -RX --prompt="$less_prompt" "${log_files[$idx]}"
@@ -1690,14 +1691,14 @@ log_remover_main() {
     for i in "${!log_files[@]}"; do if ${selected_status[$i]}; then files_to_delete+=("${log_files[$i]}"); fi; done
     if [ ${#files_to_delete[@]} -eq 0 ]; then echo -e "\n${C_YELLOW}No logs selected.${C_RESET}"; sleep 1; return; fi
 
-    echo -e "\n${C_BOLD_RED}You are about to permanently delete ${#files_to_delete[@]} log file(s).${C_RESET}"
+    echo -e "\n${C_LIGHT_RED}You are about to permanently delete ${#files_to_delete[@]} log file(s).${C_RESET}"
     read -p "${C_YELLOW}Are you sure? [${C_RESET}Y${C_YELLOW}/${C_RESET}N${C_YELLOW}]: ${C_RESET}" confirm
     if [[ ! "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then echo -e "${C_RED}Deletion canceled.${C_RESET}"; sleep 1; return; fi
     
     echo ""
     for file in "${files_to_delete[@]}"; do
         if rm "$file"; then
-            log "Deleted log file: $file" "-> Deleted ${C_BLUE}$(basename "$file")${C_RESET}"
+            log "Deleted log file: $file" "-> Deleted ${C_CYAN}$(basename "$file")${C_RESET}"
         else
             log "ERROR: Failed to delete log file: $file" "-> ${C_RED}Failed to delete $(basename "$file")${C_RESET}"
         fi
@@ -1827,7 +1828,7 @@ update_unused_images_main() {
     done < <($SUDO_CMD docker images --format '{{.ID}} {{.Repository}}:{{.Tag}}')
 
     if [ ${#images_to_update[@]} -gt 0 ]; then
-        log "Found ${#images_to_update[@]} unused images to update. Starting parallel pulls..." "${C_BLUE}Found ${#images_to_update[@]} images to update. Pulling...${C_RESET}"
+        log "Found ${#images_to_update[@]} unused images to update. Starting parallel pulls..." "${C_CYAN}Found ${#images_to_update[@]} images to update. Pulling...${C_RESET}"
         for image in "${images_to_update[@]}"; do
             (
                 log "Updating unused image: $image"
@@ -1841,12 +1842,12 @@ update_unused_images_main() {
     fi
 
     local updated_count=${#images_to_update[@]}
-    log "Cleaning up old, dangling images..." "${C_BLUE}Cleaning up old, dangling images...${C_RESET}"
+    log "Cleaning up old, dangling images..." "${C_CYAN}Cleaning up old, dangling images...${C_RESET}"
     execute_and_log $SUDO_CMD docker image prune -f
 
     echo -e "\n${C_GREEN}--- Update Summary ---${C_RESET}"
-    echo "  Total images scanned: ${C_BLUE}$total_images_scanned${C_RESET}"
-    if $DRY_RUN; then echo "  Images that would be updated: ${C_BLUE}$updated_count${C_RESET}"; else echo "  Images updated: ${C_BLUE}$updated_count${C_RESET}"; fi
+    echo "  Total images scanned: ${C_CYAN}$total_images_scanned${C_RESET}"
+    if $DRY_RUN; then echo "  Images that would be updated: ${C_CYAN}$updated_count${C_RESET}"; else echo "  Images updated: ${C_CYAN}$updated_count${C_RESET}"; fi
     echo "  Images skipped (in use): ${C_YELLOW}$used_count${C_RESET}"
     echo "  Images skipped (on ignore list): ${C_YELLOW}$ignored_count${C_RESET}"
     echo "  Images skipped (un-pullable): ${C_YELLOW}$unpullable_count${C_RESET}"
@@ -2051,13 +2052,13 @@ settings_manager_menu() {
                 _update_config_value "BACKUP_LOCATION" "Default Backup Location" "$BACKUP_LOCATION"
                 _update_config_value "RESTORE_LOCATION" "Default Restore Location" "$RESTORE_LOCATION"
                 _update_config_value "LOG_DIR" "Log Directory Path" "$LOG_DIR"
-                echo -e "\n${C_BLUE}Path settings updated. Press Enter...${C_RESET}"; read -r
+                echo -e "\n${C_CYAN}Path settings updated. Press Enter...${C_RESET}"; read -r
                 ;;
             2) # Helper Images
                 clear; echo -e "${C_YELLOW}--- Helper Image Settings ---${C_RESET}"
                 _update_config_value "BACKUP_IMAGE" "Backup Helper Image" "$BACKUP_IMAGE"
                 _update_config_value "EXPLORE_IMAGE" "Volume Explorer Image" "$EXPLORE_IMAGE"
-                echo -e "\n${C_BLUE}Image settings updated. Press Enter...${C_RESET}"; read -r
+                echo -e "\n${C_CYAN}Image settings updated. Press Enter...${C_RESET}"; read -r
                 ;;
             3) # Ignored Volumes
                 local -a all_volumes; mapfile -t all_volumes < <($SUDO_CMD docker volume ls --format "{{.Name}}" | sort)
@@ -2075,7 +2076,7 @@ settings_manager_menu() {
                 update_secure_archive_settings
                 _update_config_value "RAR_COMPRESSION_LEVEL" "Default RAR Compression Level (0-5)" "${RAR_COMPRESSION_LEVEL:-3}"
 
-                echo -e "\n${C_BLUE}Archive settings updated. Press Enter...${C_RESET}"; read -r
+                echo -e "\n${C_CYAN}Archive settings updated. Press Enter...${C_RESET}"; read -r
                 ;;
             6) # Schedule Apps Updater
                 setup_cron_job
@@ -2104,7 +2105,7 @@ main_menu() {
     )
     while true; do
         # Use "Q" mode to show only Quit, not Return
-        print_standard_menu "Docker Tool Suite ${SCRIPT_VERSION} - ${C_BLUE}${CURRENT_USER}" options "Q"
+        print_standard_menu "Docker Tool Suite ${SCRIPT_VERSION} - ${C_CYAN}${CURRENT_USER}" options "Q"
         
         read -rp "${C_YELLOW}Please select an option: ${C_RESET}" choice
         case "$choice" in
