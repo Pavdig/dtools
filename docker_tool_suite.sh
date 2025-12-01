@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.4.9
+SCRIPT_VERSION=v1.4.9.1
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -178,7 +178,7 @@ _enable_cron_logging() {
 
     LOG_FILE="$new_log_file"
 
-    exec > >(while IFS= read -r line; do echo "[$(date +'%Y-%m-%d %H:%M:%S')] $line"; done >> "$new_log_file") 2>&1
+    exec > >(while IFS= read -r line || [ -n "$line" ]; do echo "[$(date +'%Y-%m-%d %H:%M:%S')] $line"; done >> "$new_log_file") 2>&1
 
     if [[ -n "${SUDO_USER-}" ]]; then
         trap "chown '${SUDO_USER}:${SUDO_USER}' '$new_log_file'" EXIT
@@ -438,11 +438,11 @@ initial_setup() {
         echo "#  Unified Configuration for Docker Tool Suite"
         echo "# ============================================="
         echo
-        echo "# --- App Manager ---"
+        echo "# App Directories"
         printf "APPS_BASE_PATH=\"%s\"\n" "${APPS_BASE_PATH}"
         printf "MANAGED_SUBDIR=\"%s\"\n" "${MANAGED_SUBDIR}"
         echo
-        echo "# --- Volume Manager ---"
+        echo "# Backup Directories"
         printf "BACKUP_LOCATION=\"%s\"\n" "${BACKUP_LOCATION}"
         printf "RESTORE_LOCATION=\"%s\"\n" "${RESTORE_LOCATION}"
         echo ""
@@ -473,12 +473,12 @@ initial_setup() {
         fi
         echo ")"
         echo
-        echo "# --- Secure Archive (RAR) ---"
+        echo "# Archive (RAR) Settings"
         echo "# RAR Password is encrypted using a machine-specific key."
         printf "ENCRYPTED_RAR_PASSWORD=%q\n" "${ENCRYPTED_RAR_PASSWORD}"
         echo "RAR_COMPRESSION_LEVEL=${RAR_COMPRESSION_LEVEL}"
         echo
-        echo "# --- Logs ---"
+        echo "# Log Settings"
         printf "LOG_DIR=\"%s\"\n" "${LOG_DIR}"
         printf "LOG_SUBDIR_UPDATE=\"%s\"\n" "${LOG_SUBDIR_UPDATE}"
         printf "LOG_SUBDIR_UNUSED=\"%s\"\n" "${LOG_SUBDIR_UNUSED}"
@@ -1447,7 +1447,7 @@ volume_smart_backup_main() {
         fi
     fi
 
-    while IFS= read -r line; do
+    while IFS= read -r line || [ -n "$line" ]; do
         if [[ "$line" =~ (Done|OK|All OK) ]]; then
             echo -e "${C_GREEN}${line}${C_RESET}"
         elif [[ "$line" =~ (Adding|Updating|Creating) ]]; then
