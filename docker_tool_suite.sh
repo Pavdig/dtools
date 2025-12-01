@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.4.8.10
+SCRIPT_VERSION=v1.4.9
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -789,25 +789,31 @@ _rollback_app_task() {
 }
 
 app_manager_status() {
-    clear; log "Generating App Status Overview" "${C_CYAN}Displaying App Status Overview...${C_RESET}"
+    clear; log "Generating App Status Overview" "${C_CYAN}Displaying App Status Overview...${C_RESET}"; clear
     local less_prompt="(Scroll with arrow keys, press 'q' to return)"
     (
         declare -A running_projects
         while read -r proj; do
+            proj=$(echo "$proj" | tr -d '\r')
             [[ -n "$proj" ]] && running_projects["$proj"]=1
-        done < <($SUDO_CMD docker compose ls | grep 'running' | awk '{print $1}')
+        done < <($SUDO_CMD docker compose ls --quiet)
 
-        echo -e "================ App Status Overview ================\n"
-        echo -e "${C_YELLOW}--- Essential Apps (${APPS_BASE_PATH}) ---${C_RESET}"
+        echo -e "${C_RESET}=============================================="
+        echo -e "${C_RESET} ${C_GREEN}App Status Overview ${C_RESET}"
+        echo -e "${C_RESET}==============================================\n"
+        echo -e "${C_RESET} --- ${C_YELLOW}Essential Apps (${C_CYAN}${APPS_BASE_PATH}${C_YELLOW}) ${C_RESET}---"
         local -a essential_apps; discover_apps "$APPS_BASE_PATH" essential_apps
-        if [ ${#essential_apps[@]} -eq 0 ]; then echo "No essential apps found."; else
-            for app in "${essential_apps[@]}"; do
-                if [ "$app" != "$MANAGED_SUBDIR" ]; then
-                    if [[ -v running_projects[$app] ]]; then echo -e " ${C_GREEN}[RUNNING]${C_RESET}\t$app"; else echo -e " ${C_RED}[STOPPED]${C_RESET}\t$app"; fi
+        for app in "${essential_apps[@]}"; do
+            if [ "$app" != "$MANAGED_SUBDIR" ]; then
+                if [[ -v running_projects[${app,,}] ]]; then 
+                    echo -e " ${C_GREEN}[RUNNING]${C_RESET}\t$app"
+                else 
+                    echo -e " ${C_RED}[STOPPED]${C_RESET}\t$app"
                 fi
-            done
-        fi
-        echo -e "\n${C_YELLOW}--- Managed Apps (${MANAGED_SUBDIR}) ---${C_RESET}"
+            fi
+        done
+        echo -e "\n${C_RESET}----------------------------------------------"
+        echo -e "\n${C_YELLOW}--- Managed Apps (${C_CYAN}${MANAGED_SUBDIR}${C_YELLOW}) ---${C_RESET}"
         local -a managed_apps; local managed_path="$APPS_BASE_PATH/$MANAGED_SUBDIR"; discover_apps "$managed_path" managed_apps
         if [ ${#managed_apps[@]} -eq 0 ]; then echo "No managed apps found."; else
             for app in "${managed_apps[@]}"; do
@@ -883,18 +889,22 @@ app_manager_interactive_handler() {
         if [[ "$action" == "stop" || "$action" == "update" ]]; then
             [[ "$force_flag" == "false" ]] && title+=" (defaults to running)"
             declare -A running_apps_map
-            while read -r project; do [[ -n "$project" ]] && running_apps_map["$project"]=1; done < <($SUDO_CMD docker compose ls --quiet)
+            while read -r project; do 
+                project=$(echo "$project" | tr -d '\r')
+                [[ -n "$project" ]] && running_apps_map["$project"]=1
+            done < <($SUDO_CMD docker compose ls --quiet)
+            
             for app in "${all_apps[@]}"; do
-                if [[ -v running_apps_map[$app] ]]; then selected_status+=("true"); else selected_status+=("false"); fi
+                if [[ -v running_apps_map[${app,,}] ]]; then selected_status+=("true"); else selected_status+=("false"); fi
             done
         else
             for ((i=0; i<${#all_apps[@]}; i++)); do selected_status+=("false"); done
         fi
 
-        local menu_result; show_selection_menu "$title" "$menu_action_key" all_apps selected_status
-        menu_result=$?
-
-        if [[ $menu_result -eq 1 ]]; then log "User quit. No action taken." ""; continue; fi
+        if ! show_selection_menu "$title" "$menu_action_key" all_apps selected_status; then
+            log "${C_YELLOW}User quit. No action taken." ""
+            continue
+        fi
 
         if [[ "$action" == "rollback" ]]; then
             local count=0
@@ -935,8 +945,9 @@ app_manager_update_all_known_apps() {
     declare -A running_projects
 
     while read -r proj; do
+        proj=$(echo "$proj" | tr -d '\r')
         [[ -n "$proj" ]] && running_projects["$proj"]=1
-    done < <($SUDO_CMD docker compose ls | grep 'running' | awk '{print $1}')
+    done < <($SUDO_CMD docker compose ls --quiet)
 
     local -a essential_apps; discover_apps "$APPS_BASE_PATH" essential_apps
     local -a managed_apps; discover_apps "$APPS_BASE_PATH/$MANAGED_SUBDIR" managed_apps
@@ -950,7 +961,7 @@ app_manager_update_all_known_apps() {
 
     for app in "${essential_apps[@]}"; do
         if [[ "$app" != "$MANAGED_SUBDIR" ]]; then
-            if [[ -v running_projects[$app] ]]; then
+            if [[ -v running_projects[${app,,}] ]]; then
                 echo -e "\n${C_CYAN}--- Updating RUNNING Essential App: ${C_YELLOW}${app}${C_CYAN} ---${C_RESET}"
                 _update_app_task "$app" "$APPS_BASE_PATH/$app"
             else
