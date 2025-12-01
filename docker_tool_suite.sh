@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.4.8.8
+SCRIPT_VERSION=v1.4.8.9
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -424,7 +424,8 @@ initial_setup() {
             printf "\n"; for vol in "${selected_ignored_volumes[@]}"; do echo "    \"$vol\""; done
         else
             printf "\n"; echo "    \"example-of-ignored_volume-1\""
-            printf "\n"; echo "    \"example-of-ignored_volume-2\""
+            printf ""; echo "    \"example-of-ignored_volume-2\""
+            printf ""; echo "    \"example-of-ignored_volume-3\""
         fi
         echo ")"
         echo
@@ -434,7 +435,8 @@ initial_setup() {
             printf "\n"; for img in "${selected_ignored_images[@]}"; do echo "    \"$img\""; done
         else
             printf "\n"; echo "    \"custom-registry/my-custom-app-1:latest\""
-            printf "\n"; echo "    \"custom-registry/my-custom-app-2:latest\""
+            printf ""; echo "    \"custom-registry/my-custom-app-2:latest\""
+            printf ""; echo "    \"custom-registry/my-custom-app-3:latest\""
         fi
         echo ")"
         echo
@@ -454,6 +456,10 @@ initial_setup() {
     echo -e "${C_YELLOW}Creating directories and setting permissions...${C_RESET}"
     mkdir -p "${APPS_BASE_PATH}/${MANAGED_SUBDIR}" "${BACKUP_LOCATION}" "${RESTORE_LOCATION}" "${LOG_DIR}"
     chown -R "${CURRENT_USER}:${CURRENT_USER}" "${CONFIG_DIR}" "${APPS_BASE_PATH}" "${BACKUP_LOCATION}" "${RESTORE_LOCATION}" "${LOG_DIR}"
+
+    # Restrict Config Permissions
+    chmod 700 "${CONFIG_DIR}"
+    chmod 600 "${CONFIG_FILE}"
 
     setup_cron_job
     setup_unused_images_cron_job
@@ -1706,6 +1712,7 @@ update_secure_archive_settings() {
     local anchor="# RAR Password is encrypted using a machine-specific key."
     sed -i "\|$anchor|a ${new_config_line}" "$CONFIG_FILE"
 
+    chmod 600 "$CONFIG_FILE" # Re-apply security
     source "$CONFIG_FILE"
 
     if [[ -z "$ENCRYPTED_RAR_PASSWORD" ]]; then
@@ -1891,6 +1898,7 @@ _update_config_value() {
         echo "${key}=$(printf "%q" "$new_value")" >> "$CONFIG_FILE"
     fi
     
+    chmod 600 "$CONFIG_FILE" # Re-apply security
     echo -e "${C_GREEN}${TICKMARK} Setting '${key}' updated.${C_RESET}"
     source "$CONFIG_FILE"
 }
@@ -1950,6 +1958,7 @@ update_ignored_items() {
         echo
     } >> "$CONFIG_FILE"
 
+    chmod 600 "$CONFIG_FILE" # Re-apply security
     echo -e "${C_GREEN}${TICKMARK} Ignored ${item_type,,} list updated successfully.${C_RESET}"
     source "$CONFIG_FILE"
 }
@@ -2040,6 +2049,8 @@ main_menu() {
 # --- Argument Parsing at script entry ---
 if [[ $# -gt 0 ]]; then
     if [[ ! -f "$CONFIG_FILE" ]]; then echo -e "${C_RED}Config not found. Please run with 'sudo' for initial setup.${C_RESET}"; exit 1; fi
+    # Security: Ensure config is locked down before reading
+    chmod 600 "$CONFIG_FILE" 2>/dev/null || true
     case "$1" in
         --help|-h)
             echo -e "${C_RESET}=============================================="
@@ -2126,7 +2137,20 @@ if [[ $# -gt 0 ]]; then
     esac
 fi
 
-source "$CONFIG_FILE"
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    initial_setup
+fi
+
+if [[ -f "$CONFIG_FILE" ]]; then
+    chmod 600 "$CONFIG_FILE" 2>/dev/null || true
+    chmod 700 "$CONFIG_DIR" 2>/dev/null || true
+
+    source "$CONFIG_FILE"
+else
+    echo -e "${C_RED}Error: Configuration file not found.${C_RESET}"
+    exit 1
+fi
+
 LOG_FILE="$LOG_DIR/$(date +'%Y-%m-%d').log"; mkdir -p "$LOG_DIR"
 prune_old_logs
 check_deps
