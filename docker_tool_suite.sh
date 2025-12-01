@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.4.8.7
+SCRIPT_VERSION=v1.4.8.8
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -89,16 +89,17 @@ get_secret_key() {
 
 encrypt_pass() {
     local plaintext="$1"
-    local key
-    key=$(get_secret_key)
-    printf '%s' "$plaintext" | openssl enc -aes-256-cbc -a -salt -pbkdf2 -pass pass:"$key" | tr -d '\n'
+    # We pass the key via file descriptor 3 using process substitution
+    # to avoid the key appearing in process lists (as arguments).
+    # Standard input (fd 0) is used for the plaintext.
+    printf '%s' "$plaintext" | openssl enc -aes-256-cbc -a -salt -pbkdf2 -pass fd:3 3< <(get_secret_key) | tr -d '\n'
 }
 
 decrypt_pass() {
     local encrypted_text="$1"
-    local key
-    key=$(get_secret_key)
-    printf '%s\n' "$encrypted_text" | openssl enc -aes-256-cbc -a -d -salt -pbkdf2 -pass pass:"$key" 2>/dev/null || true
+    # We pass the key via file descriptor 3 using process substitution.
+    # Standard input (fd 0) is used for the encrypted text.
+    printf '%s\n' "$encrypted_text" | openssl enc -aes-256-cbc -a -d -salt -pbkdf2 -pass fd:3 3< <(get_secret_key) 2>/dev/null || true
 }
 
 _record_image_state() {
@@ -1423,18 +1424,36 @@ volume_smart_backup_main() {
             echo -e "${C_CYAN}Detected split archive. Verifying part 1 sequence...${C_RESET}"
         fi
 
-        echo -e "${C_YELLOW}Verifying archive integrity...${C_RESET}"
-        local verify_cmd=(rar t)
-        [[ -n "$archive_password" ]] && verify_cmd+=("-p${archive_password}")
+    echo -e "${C_YELLOW}Verifying archive integrity...${C_RESET}"
+    local verify_cmd=(rar t)
+    # We do NOT add "-pPassword" here to avoid leaking it in process lists.
+    
+    verify_cmd+=("--" "$file_to_verify")
 
-        verify_cmd+=("--" "$file_to_verify")
-        if "${verify_cmd[@]}" &>/dev/null; then
-             echo -e "${C_GREEN}Verification Passed: Archive is healthy.${C_RESET}\n"
-        else
-             echo -e "${C_LIGHT_RED}Verification FAILED! Do not delete the source files.${C_RESET}\n"
-             return 1
+    local verify_success=false
+
+    if [[ -n "$archive_password" ]]; then
+        # Pipe the password to stdin. Since we used -hp (encrypt headers) during creation,
+        # rar will prompt for a password immediately. We feed it via printf.
+        # Note: We add \n here because interactive prompts usually expect an Enter key.
+        if printf '%s\n' "$archive_password" | "${verify_cmd[@]}" &>/dev/null; then
+            verify_success=true
         fi
+    else
+        if "${verify_cmd[@]}" &>/dev/null; then
+            verify_success=true
+        fi
+    fi
 
+    if $verify_success; then
+         echo -e "${C_GREEN}Verification Passed: Archive is healthy.${C_RESET}\n"
+    else
+         echo -e "${C_LIGHT_RED}Verification FAILED! Do not delete the source files.${C_RESET}\n"
+         return 1
+    fi
+    
+    # Security: Clear the password variable from memory immediately after use
+    unset archive_password
 
         while true; do
             echo -e "${C_YELLOW}Do you want to delete the source backup folder?${C_RESET}"
