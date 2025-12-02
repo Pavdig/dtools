@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.4.9.2
+SCRIPT_VERSION=v1.4.9.3
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -317,6 +317,81 @@ interactive_list_builder() {
     for i in "${!source_array[@]}"; do if ${selected_status[$i]}; then result_array+=("${source_array[$i]}"); fi; done
 }
 
+configure_shell_alias() {
+    check_root
+    local user_home="/home/${CURRENT_USER}"
+    local shell_rc=""
+    local comment_line="# Alias added by Docker Tool Suite"
+
+    # Detect Shell Config File
+    if [[ -f "${user_home}/.zshrc" ]]; then
+        shell_rc="${user_home}/.zshrc"
+    elif [[ -f "${user_home}/.bashrc" ]]; then
+        shell_rc="${user_home}/.bashrc"
+    else
+        echo -e "${C_RED}Error: Could not detect .zshrc or .bashrc for user ${CURRENT_USER}.${C_RESET}"
+        read -p "Press Enter to continue..."
+        return
+    fi
+
+    clear
+    echo -e "${C_YELLOW}--- Configure Shell Alias ---${C_RESET}"
+    echo -e "Target User:   ${C_GREEN}${CURRENT_USER}${C_RESET}"
+    echo -e "Config File:   ${C_GREEN}${shell_rc}${C_RESET}"
+    echo -e "Script Path:   ${C_CYAN}${SCRIPT_PATH}${C_RESET}\n"
+
+    echo "Select an option:"
+    echo -e "   1) ${C_CYAN}Create or Update Alias${C_RESET}"
+    echo -e "   2) ${C_RED}Remove Alias${C_RESET}"
+    echo -e "   3) ${C_YELLOW}Cancel${C_RESET}"
+    echo
+    read -p "${C_YELLOW}Enter choice [${C_RESET}1${C_YELLOW}-${C_RESET}3${C_YELLOW}]: ${C_RESET}" choice
+
+    case "$choice" in
+        1)
+            local default_alias="dtools"
+            read -p "Enter alias name [${C_GREEN}${default_alias}${C_RESET}]: " alias_name
+            alias_name=${alias_name:-$default_alias}
+
+            # Define the new line
+            local new_alias_line="alias ${alias_name}='${SCRIPT_PATH}'"
+            
+            # Clean up: Remove old comment if it exists
+            sed -i "/^${comment_line}/d" "$shell_rc"
+            
+            # Clean up: Remove any existing alias with this specific name
+            # We use sed with /d to delete lines starting with "alias name="
+            sed -i "/^alias ${alias_name}=/d" "$shell_rc"
+
+            # Append the comment and the alias
+            echo "$comment_line" >> "$shell_rc"
+            echo "$new_alias_line" >> "$shell_rc"
+            
+            # Fix permissions
+            chown "${CURRENT_USER}:${CURRENT_USER}" "$shell_rc"
+            
+            echo -e "\n${C_GREEN}${TICKMARK} Alias '${alias_name}' added to ${shell_rc}!${C_RESET}"
+            echo -e "${C_GRAY}NOTE: Run 'source ${shell_rc}' or restart your terminal to use it.${C_RESET}"
+            ;;
+        2)
+            echo -e "\n${C_YELLOW}Removing alias...${C_RESET}"
+            
+            # Remove the specific comment line
+            sed -i "/^${comment_line}/d" "$shell_rc"
+            
+            # Remove lines where the alias points to THIS script path.
+            # We use @ as a delimiter for sed because $SCRIPT_PATH contains slashes (/).
+            sed -i "\@^alias .*='${SCRIPT_PATH}'@d" "$shell_rc"
+            
+            # Fix permissions
+            chown "${CURRENT_USER}:${CURRENT_USER}" "$shell_rc"
+            echo -e "${C_GREEN}${TICKMARK} Alias removed successfully.${C_RESET}"
+            ;;
+        *)
+            return ;;
+    esac
+}
+
 initial_setup() {
     if [[ $EUID -ne 0 ]]; then echo -e "${C_RED}Initial setup must be run with 'sudo ./docker_tool_suite.sh'. Exiting.${C_RESET}"; exit 1; fi
     clear
@@ -496,6 +571,9 @@ initial_setup() {
 
     setup_cron_job
     setup_unused_images_cron_job
+
+    echo -e "\n${C_YELLOW}--- Optional: Shell Shortcut ---${C_RESET}"
+    configure_shell_alias
 
     echo -e "\n${C_GREEN}${TICKMARK} Setup complete! The script will now continue.${C_RESET}\n"; sleep 2
 }
@@ -1947,19 +2025,37 @@ _update_config_value() {
     local key="$1"
     local prompt_text="$2"
     local current_value="${3-}"
-    local new_value
+    local default_value="${4-}" # New optional argument
 
+    # Display helpful context
+    if [[ -n "$default_value" ]]; then
+        if [[ "$current_value" != "$default_value" ]]; then
+             echo -e "${C_GRAY}Default: ${default_value} (Type '${C_RESET}reset${C_GRAY}' to restore)${C_RESET}"
+        fi
+    fi
+
+    local new_value
     read -p "$prompt_text [${C_GREEN}${current_value}${C_RESET}]: " new_value
-    new_value=${new_value:-$current_value}
+
+    # Handle the reset keyword
+    if [[ -n "$default_value" && "${new_value,,}" == "reset" ]]; then
+        new_value="$default_value"
+        echo -e "${C_YELLOW}Restoring default value: ${new_value}${C_RESET}"
+    else
+        # Standard behavior: Use input or keep current if empty
+        new_value=${new_value:-$current_value}
+    fi
+
+    # Wrap the new value in double quotes for config safety
+    local replacement="\"${new_value}\""
 
     if grep -q "^${key}=" "$CONFIG_FILE"; then
-        local replacement; replacement=$(printf "%q" "$new_value")
         sed -i "/^${key}=/c\\${key}=${replacement}" "$CONFIG_FILE"
     else
-        echo "${key}=$(printf "%q" "$new_value")" >> "$CONFIG_FILE"
+        echo "${key}=${replacement}" >> "$CONFIG_FILE"
     fi
     
-    chmod 600 "$CONFIG_FILE" # Re-apply security
+    chmod 600 "$CONFIG_FILE"
     echo -e "${C_GREEN}${TICKMARK} Setting '${key}' updated.${C_RESET}"
     load_config "$CONFIG_FILE"
 }
@@ -2025,12 +2121,23 @@ update_ignored_items() {
 }
 
 settings_manager_menu() {
+    # Define defaults matching initial_setup for restoration
+    local apps_path_def="/home/${CURRENT_USER}/apps"
+    local managed_subdir_def="managed_stacks"
+    local backup_path_def="/home/${CURRENT_USER}/backups/docker-volume-backups"
+    local restore_path_def="/home/${CURRENT_USER}/backups/docker-volume-backups"
+    local log_dir_def="/home/${CURRENT_USER}/logs/dtools"
+    local backup_image_def="docker/alpine-tar-zstd:latest"
+    local explore_image_def="debian:trixie-slim"
+    local rar_level_def="3"
+
     local options=(
-        "Change Path Settings"
-        "Change Helper Images"
-        "Change Ignored Volumes"
-        "Change Ignored Images"
-        "Change Archive Settings"
+        "Path Settings"
+        "Helper Images"
+        "Ignored Volumes"
+        "Ignored Images"
+        "Archive Settings"
+        "Shell Alias"
         "Schedule Apps Updater"
         "Schedule Unused Image Updater"
     )
@@ -2041,17 +2148,17 @@ settings_manager_menu() {
         case "$choice" in
             1)
                 clear; echo -e "${C_YELLOW}--- Path Settings ---${C_RESET}"
-                _update_config_value "APPS_BASE_PATH" "Base Compose Apps Path" "$APPS_BASE_PATH"
-                _update_config_value "MANAGED_SUBDIR" "Managed Apps Subdirectory" "$MANAGED_SUBDIR"
-                _update_config_value "BACKUP_LOCATION" "Default Backup Location" "$BACKUP_LOCATION"
-                _update_config_value "RESTORE_LOCATION" "Default Restore Location" "$RESTORE_LOCATION"
-                _update_config_value "LOG_DIR" "Log Directory Path" "$LOG_DIR"
+                _update_config_value "APPS_BASE_PATH" "Base Compose Apps Path" "$APPS_BASE_PATH" "$apps_path_def"
+                _update_config_value "MANAGED_SUBDIR" "Managed Apps Subdirectory" "$MANAGED_SUBDIR" "$managed_subdir_def"
+                _update_config_value "BACKUP_LOCATION" "Default Backup Location" "$BACKUP_LOCATION" "$backup_path_def"
+                _update_config_value "RESTORE_LOCATION" "Default Restore Location" "$RESTORE_LOCATION" "$restore_path_def"
+                _update_config_value "LOG_DIR" "Log Directory Path" "$LOG_DIR" "$log_dir_def"
                 echo -e "\n${C_CYAN}Path settings updated. Press Enter...${C_RESET}"; read -r
                 ;;
             2)
                 clear; echo -e "${C_YELLOW}--- Helper Image Settings ---${C_RESET}"
-                _update_config_value "BACKUP_IMAGE" "Backup Helper Image" "$BACKUP_IMAGE"
-                _update_config_value "EXPLORE_IMAGE" "Volume Explorer Image" "$EXPLORE_IMAGE"
+                _update_config_value "BACKUP_IMAGE" "Backup Helper Image" "$BACKUP_IMAGE" "$backup_image_def"
+                _update_config_value "EXPLORE_IMAGE" "Volume Explorer Image" "$EXPLORE_IMAGE" "$explore_image_def"
                 echo -e "\n${C_CYAN}Image settings updated. Press Enter...${C_RESET}"; read -r
                 ;;
             3)
@@ -2068,15 +2175,19 @@ settings_manager_menu() {
                 clear; echo -e "${C_YELLOW}--- Archive Settings ---${C_RESET}"
                 
                 update_secure_archive_settings
-                _update_config_value "RAR_COMPRESSION_LEVEL" "Default RAR Compression Level (0-5)" "${RAR_COMPRESSION_LEVEL:-3}"
+                _update_config_value "RAR_COMPRESSION_LEVEL" "Default RAR Compression Level (0-5)" "${RAR_COMPRESSION_LEVEL:-3}" "$rar_level_def"
 
                 echo -e "\n${C_CYAN}Archive settings updated. Press Enter...${C_RESET}"; read -r
                 ;;
             6)
-                setup_cron_job
+                configure_shell_alias
                 echo -e "\nPress Enter to return..."; read -r
                 ;;
             7)
+                setup_cron_job
+                echo -e "\nPress Enter to return..."; read -r
+                ;;
+            8)
                 setup_unused_images_cron_job
                 echo -e "\nPress Enter to return..."; read -r
                 ;;
