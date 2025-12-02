@@ -1,4 +1,3 @@
-```markdown
 # Docker Tool Suite (dtools)
 
 **Version:** v1.4.9.2
@@ -33,7 +32,6 @@ The script runs on Debian-based systems and requires:
 - `openssl` (for password encryption)
 - `rar` (optional, for creating secure archives)
 - Root/Sudo privileges
-```
 
 ## 🛠️ Installation
 
