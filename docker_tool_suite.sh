@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.4.9.1
+SCRIPT_VERSION=v1.4.9.2
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -1205,6 +1205,11 @@ _find_project_dir_by_name() {
     return 1
 }
 
+_is_volume_empty() {
+    local volume_name="$1"
+    $SUDO_CMD docker run --rm -v "${volume_name}:/volume:ro" "${BACKUP_IMAGE}" sh -c '[ -z "$(ls -A /volume)" ]' &> /dev/null
+}
+
 volume_smart_backup_main() {
     clear; echo -e "${C_GREEN}Starting Smart Docker Volume Backup...${C_RESET}"
 
@@ -1268,6 +1273,12 @@ volume_smart_backup_main() {
             local -a vols_to_backup; read -r -a vols_to_backup <<< "${app_volumes_map[$app_name]}"
             echo "   -> Backing up ${#vols_to_backup[@]} volume(s)..."
             for volume in "${vols_to_backup[@]}"; do
+                if _is_volume_empty "$volume"; then
+                    echo -e "      - ${C_GRAY}Skipping empty volume: ${volume}${C_RESET}"
+                    log "Skipped empty volume: $volume"
+                    continue
+                fi
+                
                 echo "      - Backing up ${C_CYAN}${volume}${C_RESET}..."
                 execute_and_log $SUDO_CMD docker run --rm -v "${volume}:/volume:ro" -v "${backup_dir}:/backup" "${BACKUP_IMAGE}" tar -C /volume --zstd -cvf "/backup/${volume}.tar.zst" .
             done
@@ -1279,6 +1290,12 @@ volume_smart_backup_main() {
     if [[ ${#standalone_volumes[@]} -gt 0 ]]; then
         echo -e "\n${C_GREEN}--- Processing Standalone Volume Backups ---${C_RESET}"
         for volume in "${standalone_volumes[@]}"; do
+            if _is_volume_empty "$volume"; then
+                echo -e " -> ${C_GRAY}Skipping empty volume: ${volume}${C_RESET}"
+                log "Skipped empty volume: $volume"
+                continue
+            fi
+
             echo -e "${C_YELLOW}Backing up standalone volume: ${C_CYAN}${volume}${C_RESET}..."
             execute_and_log $SUDO_CMD docker run --rm -v "${volume}:/volume:ro" -v "${backup_dir}:/backup" "${BACKUP_IMAGE}" tar -C /volume --zstd -cvf "/backup/${volume}.tar.zst" .
         done
