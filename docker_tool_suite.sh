@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.4.9.3
+SCRIPT_VERSION=v1.4.9.4
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -236,7 +236,7 @@ check_deps() {
     if ! command -v docker &>/dev/null; then log "Error: Docker not found." "${C_RED}Error: Docker is not installed...${C_RESET}"; error_found=true; fi
     if ! $SUDO_CMD docker compose version &>/dev/null; then log "Error: Docker Compose V2 not found." "${C_RED}Error: Docker Compose V2 not available...${C_RESET}"; error_found=true; fi
     if ! command -v openssl &>/dev/null; then log "Error: openssl not found." "${C_RED}Error: 'openssl' is not installed (required for password encryption)...${C_RESET}"; error_found=true; fi
-    if ! command -v rar &>/dev/null; then log "Warning: 'rar' command not found." "${C_YELLOW}Warning: 'rar' is not installed (optional, for creating secure archives)...${C_RESET}"; fi
+    if ! command -v 7z &>/dev/null; then log "Warning: '7z' command not found." "${C_YELLOW}Warning: '7z' is not installed (required for secure archives)...${C_RESET}"; fi
     if $error_found; then exit 1; fi
     log "Dependencies check passed." ""
 }
@@ -395,9 +395,9 @@ configure_shell_alias() {
 initial_setup() {
     if [[ $EUID -ne 0 ]]; then echo -e "${C_RED}Initial setup must be run with 'sudo ./docker_tool_suite.sh'. Exiting.${C_RESET}"; exit 1; fi
     clear
-    echo -e "${C_RESET}================================================"
+    echo -e "${C_RESET}====================================================="
     echo -e "${C_GREEN} Welcome to the ${C_CYAN}Docker Tool Suite ${SCRIPT_VERSION} ${C_GREEN}Setup!"
-    echo -e "${C_RESET}================================================\n"
+    echo -e "${C_RESET}=====================================================\n"
     echo -e "${C_YELLOW}This one-time setup will configure all modules.\n"
     echo -e "${C_RESET}Settings will be saved to: ${C_GREEN}${CONFIG_FILE}${C_RESET}\n"
 
@@ -438,31 +438,31 @@ initial_setup() {
     EXPLORE_IMAGE=${exp_img:-$explore_image_def}
 
     local -a selected_ignored_volumes=()
-    read -p $'\n'"${C_YELLOW}Do you want to configure ignored volumes now? (${C_GREEN}y${C_YELLOW}/${C_RED}N${C_YELLOW})${C_RESET}: " config_vols
+    read -p $'\n'"${C_YELLOW}Do you want to configure ignored ${C_CYAN}volumes ${C_YELLOW}now? (${C_GREEN}y${C_YELLOW}/${C_RED}N${C_YELLOW})${C_RESET}: " config_vols
     if [[ "${config_vols,,}" =~ ^(y|Y|yes|YES)$ ]]; then
         mapfile -t all_volumes < <(docker volume ls --format "{{.Name}}" | sort)
         interactive_list_builder "Select Volumes to IGNORE during backup" all_volumes selected_ignored_volumes
     fi
     
     local -a selected_ignored_images=()
-    read -p $'\n'"${C_YELLOW}Do you want to configure ignored images now? (${C_GREEN}y${C_YELLOW}/${C_RED}N${C_YELLOW})${C_RESET}: " config_imgs
+    read -p $'\n'"${C_YELLOW}Do you want to configure ignored ${C_CYAN}images ${C_YELLOW}now? (${C_GREEN}y${C_YELLOW}/${C_RED}N${C_YELLOW})${C_RESET}: " config_imgs
     if [[ "${config_imgs,,}" =~ ^(y|Y|yes|YES)$ ]]; then
         mapfile -t all_images < <(docker image ls --format "{{.Repository}}:{{.Tag}}" | grep -v "<none>" | sort)
         interactive_list_builder "Select Images to IGNORE during updates" all_images selected_ignored_images
     fi
 
     echo -e "\n${C_YELLOW}--- Secure Archive Settings ---${C_RESET}"
-    local rar_pass_1 rar_pass_2 ENCRYPTED_RAR_PASSWORD=""
+    local archive_pass_1 archive_pass_2 ENCRYPTED_ARCHIVE_PASSWORD=""
 
     while true; do
-        echo -e "${C_GRAY}This password will be used to encrypt RAR backups by default.${C_RESET}"
-        read -sp "Enter a default password (leave blank for none): " rar_pass_1; echo
+        echo -e "${C_GRAY}This password will be used to encrypt 7z backups by default.${C_RESET}"
+        read -sp "Enter a default password (leave blank for none): " archive_pass_1; echo
 
-        if [[ -z "$rar_pass_1" ]]; then
-            read -p "${C_YELLOW}You left the password blank. Disable default encryption? (Y/n): ${C_RESET}" confirm_no_pass
+        if [[ -z "$archive_pass_1" ]]; then
+            read -p "${C_RED}You left the password blank! ${C_YELLOW}Disable default encryption? (${C_RED}Y${C_YELLOW}/${C_GREEN}n${C_YELLOW}): ${C_RESET}" confirm_no_pass
             if [[ "${confirm_no_pass:-y}" =~ ^[Yy]$ ]]; then
                 echo -e "${C_GREEN}-> Default encryption disabled.${C_RESET}"
-                ENCRYPTED_RAR_PASSWORD=""
+                ENCRYPTED_ARCHIVE_PASSWORD=""
                 break
             else
                 echo -e "${C_CYAN}-> Please enter a password then.${C_RESET}"
@@ -470,10 +470,10 @@ initial_setup() {
             fi
         fi
 
-        read -sp "Confirm password: " rar_pass_2; echo
+        read -sp "Confirm password: " archive_pass_2; echo
 
-        if [[ "$rar_pass_1" == "$rar_pass_2" ]]; then
-            ENCRYPTED_RAR_PASSWORD=$(encrypt_pass "${rar_pass_1}")
+        if [[ "$archive_pass_1" == "$archive_pass_2" ]]; then
+            ENCRYPTED_ARCHIVE_PASSWORD=$(encrypt_pass "${archive_pass_1}")
             echo -e "${C_GREEN}-> Password saved and encrypted.${C_RESET}"
             break
         else
@@ -481,8 +481,8 @@ initial_setup() {
         fi
     done
 
-    read -p "Default RAR Compression Level (0-5) [${C_GREEN}3${C_RESET}]: " rar_level
-    RAR_COMPRESSION_LEVEL=${rar_level:-3}
+    read -p "${C_YELLOW}Default 7z Compression Level ${C_CYAN}(Copy:0 - Ultra:9) ${C_GREEN}[${C_CYAN}3-Fast${C_YELLOW}]${C_RESET}: " archive_level
+    ARCHIVE_COMPRESSION_LEVEL=${archive_level:-3}
 
     clear
     echo -e "\n${C_GREEN}_--| Docker Tool Suite ${SCRIPT_VERSION} Setup |---_${C_RESET}\n"
@@ -496,7 +496,7 @@ initial_setup() {
     echo -e "    Backup Image:    ${C_GREEN}${BACKUP_IMAGE}${C_RESET}"
     echo -e "    Explorer Image:  ${C_GREEN}${EXPLORE_IMAGE}${C_RESET}"
     echo "  Archive Settings:"
-    echo -e "    RAR Level:       ${C_GREEN}${RAR_COMPRESSION_LEVEL}${C_RESET}"
+    echo -e "    Compress Level:  ${C_GREEN}${ARCHIVE_COMPRESSION_LEVEL}${C_RESET}"
     echo "  Logs:"
     echo -e "    Log Path:        ${C_GREEN}${LOG_DIR}${C_RESET}"
     echo -e "    Log Retention:   ${C_GREEN}${LOG_RETENTION_DAYS} days${C_RESET}"
@@ -548,10 +548,11 @@ initial_setup() {
         fi
         echo ")"
         echo
-        echo "# Archive (RAR) Settings"
-        echo "# RAR Password is encrypted using a machine-specific key."
-        printf "ENCRYPTED_RAR_PASSWORD=%q\n" "${ENCRYPTED_RAR_PASSWORD}"
-        echo "RAR_COMPRESSION_LEVEL=${RAR_COMPRESSION_LEVEL}"
+        echo "# Archive (7z) Settings"
+        echo "# Password is encrypted using a machine-specific key."
+        printf "ENCRYPTED_ARCHIVE_PASSWORD=%q\n" "${ENCRYPTED_ARCHIVE_PASSWORD}"
+        echo "# Map compression: 7z levels are 0-9. (0 is copy, mx=9 is ultra)."
+        echo "ARCHIVE_COMPRESSION_LEVEL=${ARCHIVE_COMPRESSION_LEVEL}"
         echo
         echo "# Log Settings"
         printf "LOG_DIR=\"%s\"\n" "${LOG_DIR}"
@@ -1290,6 +1291,7 @@ _is_volume_empty() {
 
 volume_smart_backup_main() {
     clear; echo -e "${C_GREEN}Starting Smart Docker Volume Backup...${C_RESET}"
+    log "--- Starting Smart Volume Backup Session ---"
 
     ensure_backup_image || return
 
@@ -1346,11 +1348,14 @@ volume_smart_backup_main() {
         echo -e "\n${C_GREEN}--- Processing Application-Linked Backups ---${C_RESET}"
         for app_name in "${!app_volumes_map[@]}"; do
             echo -e "\n${C_YELLOW}Processing app: ${C_CYAN}${app_name}${C_RESET}"
+            log "Processing application group: ${app_name}"
+
             local app_dir=${app_dir_map[$app_name]}
             _stop_app_task "$app_name" "$app_dir"
             local -a vols_to_backup; read -r -a vols_to_backup <<< "${app_volumes_map[$app_name]}"
             echo "   -> Backing up ${#vols_to_backup[@]} volume(s)..."
             for volume in "${vols_to_backup[@]}"; do
+                log "Backing up volume: ${volume}"
                 if _is_volume_empty "$volume"; then
                     echo -e "      - ${C_GRAY}Skipping empty volume: ${volume}${C_RESET}"
                     log "Skipped empty volume: $volume"
@@ -1358,7 +1363,7 @@ volume_smart_backup_main() {
                 fi
                 
                 echo "      - Backing up ${C_CYAN}${volume}${C_RESET}..."
-                execute_and_log $SUDO_CMD docker run --rm -v "${volume}:/volume:ro" -v "${backup_dir}:/backup" "${BACKUP_IMAGE}" tar -C /volume --zstd -cvf "/backup/${volume}.tar.zst" .
+                execute_and_log $SUDO_CMD docker run --rm -v "${volume}:/volume:ro" -v "${backup_dir}:/backup" "${BACKUP_IMAGE}" tar -C /volume --zstd -cf "/backup/${volume}.tar.zst" .
             done
             _start_app_task "$app_name" "$app_dir"
             echo -e "${C_GREEN}Finished processing ${app_name}.${C_RESET}"
@@ -1368,6 +1373,7 @@ volume_smart_backup_main() {
     if [[ ${#standalone_volumes[@]} -gt 0 ]]; then
         echo -e "\n${C_GREEN}--- Processing Standalone Volume Backups ---${C_RESET}"
         for volume in "${standalone_volumes[@]}"; do
+            log "Backing up standalone volume: ${volume}"
             if _is_volume_empty "$volume"; then
                 echo -e " -> ${C_GRAY}Skipping empty volume: ${volume}${C_RESET}"
                 log "Skipped empty volume: $volume"
@@ -1375,7 +1381,7 @@ volume_smart_backup_main() {
             fi
 
             echo -e "${C_YELLOW}Backing up standalone volume: ${C_CYAN}${volume}${C_RESET}..."
-            execute_and_log $SUDO_CMD docker run --rm -v "${volume}:/volume:ro" -v "${backup_dir}:/backup" "${BACKUP_IMAGE}" tar -C /volume --zstd -cvf "/backup/${volume}.tar.zst" .
+            execute_and_log $SUDO_CMD docker run --rm -v "${volume}:/volume:ro" -v "${backup_dir}:/backup" "${BACKUP_IMAGE}" tar -C /volume --zstd -cf "/backup/${volume}.tar.zst" .
         done
     fi
 
@@ -1383,28 +1389,28 @@ volume_smart_backup_main() {
     $SUDO_CMD chown -R "${CURRENT_USER}:${CURRENT_USER}" "$backup_dir"
     echo -e "\n${C_GREEN}${TICKMARK} Backup tasks completed successfully!${C_RESET}"
 
-    local create_rar=""
+    local create_archive=""
     while true; do
-        read -p $'\n'"${C_CYAN}Do you want to create a password-protected RAR archive of this backup? (Y/N): ${C_RESET}" create_rar
-        case "${create_rar,,}" in
+        read -p $'\n'"${C_CYAN}Do you want to create a password-protected 7z archive of this backup? (${C_GREEN}Y${C_CYAN}/${C_RED}N${C_CYAN}): ${C_RESET}" create_archive
+        case "${create_archive,,}" in
             y|Y|yes|YES) break ;;
-            n|N|no|NO)  echo -e "${C_YELLOW}Skipping RAR archive creation.${C_RESET}"; return ;;
+            n|N|no|NO)  echo -e "${C_YELLOW}Skipping 7z archive creation.${C_RESET}"; return ;;
             *)     echo -e "${C_RED}Invalid input. Please enter Y/YES or N/NO.${C_RESET}" ;;
         esac
     done
 
-    if ! command -v rar &>/dev/null; then echo -e "\n${C_LIGHT_RED}Error: 'rar' command not found. Cannot create archive.${C_RESET}"; return 1; fi
+    if ! command -v 7z &>/dev/null; then echo -e "\n${C_LIGHT_RED}Error: '7z' command not found. Cannot create archive.${C_RESET}"; return 1; fi
     
     local archive_password=""
     local password_is_set=false
 
-    if [[ -n "${ENCRYPTED_RAR_PASSWORD-}" ]]; then
+    if [[ -n "${ENCRYPTED_ARCHIVE_PASSWORD-}" ]]; then
         echo -e "\n${C_CYAN}A default archive password is configured.${C_RESET}"
         while true; do
             read -p "Choose: ${C_CYAN}(U)se saved${C_RESET}, ${C_YELLOW}(E)nter new${C_RESET}, ${C_GRAY}(N)o password${C_RESET}, ${C_RED}(C)ancel${C_RESET}: " pass_choice
             case "${pass_choice,,}" in
                 u|U|use|USE)
-                    archive_password=$(decrypt_pass "${ENCRYPTED_RAR_PASSWORD}")
+                    archive_password=$(decrypt_pass "${ENCRYPTED_ARCHIVE_PASSWORD}")
                     if [[ -z "$archive_password" ]]; then
                         echo -e "${C_LIGHT_RED}Error: Decryption failed. Please enter manually.${C_RESET}"
                     else
@@ -1433,15 +1439,15 @@ volume_smart_backup_main() {
 
     if ! $password_is_set; then
         while true; do
-            read -sp "Enter password for the archive (leave blank for none): " rar_pass_1; echo
-            if [[ -z "$rar_pass_1" ]]; then
+            read -sp "Enter password for the archive (leave blank for none): " archive_pass_1; echo
+            if [[ -z "$archive_pass_1" ]]; then
                 archive_password=""
                 echo -e "${C_YELLOW}Proceeding without a password.${C_RESET}"
                 break
             fi
-            read -sp "Confirm password: " rar_pass_2; echo
-            if [[ "$rar_pass_1" == "$rar_pass_2" ]]; then
-                archive_password="${rar_pass_1}"
+            read -sp "Confirm password: " archive_pass_2; echo
+            if [[ "$archive_pass_1" == "$archive_pass_2" ]]; then
+                archive_password="${archive_pass_1}"
                 break
             else
                 echo -e "${C_RED}Passwords do not match. Please try again.${C_RESET}"
@@ -1453,10 +1459,10 @@ volume_smart_backup_main() {
     local archive_name=""
     
     echo -e "\n${C_YELLOW}--- Archive Naming ---${C_RESET}"
-    echo "  1) Default      : Apps-backup[${current_date}].rar"
-    echo "  2) Semi-Default : Apps-backup(TAG)[${current_date}].rar"
+    echo "  1) Default      : Apps-backup[${current_date}].7z"
+    echo "  2) Semi-Default : Apps-backup(TAG)[${current_date}].7z"
     echo "  3) Custom Name  : (User defined)"
-    echo "  4) Precision    : Apps-backup[${current_date}_HH-MM-SS].rar"
+    echo "  4) Precision    : Apps-backup[${current_date}_HH-MM-SS].7z"
     
     read -p "${C_YELLOW}Select naming convention [${C_RESET}1${C_YELLOW}-${C_RESET}4${C_YELLOW}]: ${C_RESET}" name_choice
 
@@ -1464,31 +1470,31 @@ volume_smart_backup_main() {
         2)
             read -p "Enter tag name (e.g., 'Plex' or 'Databases'): " tag_name
             tag_name="${tag_name//\//-}" 
-            archive_name="Apps-backup(${tag_name})[${current_date}].rar"
+            archive_name="Apps-backup(${tag_name})[${current_date}].7z"
             ;;
         3)
             read -p "Enter full filename: " custom_name
             custom_name="${custom_name//\//-}"
-            if [[ "${custom_name}" != *.rar ]]; then custom_name="${custom_name}.rar"; fi
+            if [[ "${custom_name}" != *.7z ]]; then custom_name="${custom_name}.7z"; fi
             archive_name="$custom_name"
             ;;
         4)
-            archive_name="Apps-backup[$(date +'%d.%m.%Y_%H-%M-%S')].rar"
+            archive_name="Apps-backup[$(date +'%d.%m.%Y_%H-%M-%S')].7z"
             ;;
         *) 
-            archive_name="Apps-backup[${current_date}].rar"
+            archive_name="Apps-backup[${current_date}].7z"
             ;;
     esac
 
     local archive_path="$(dirname "$backup_dir")/${archive_name}"
 
-    if [[ -f "$archive_path" ]] || [[ -f "${archive_path%.rar}.part1.rar" ]]; then
+    if [[ -f "$archive_path" ]] || [[ -f "${archive_path%.7z}.part1.7z" ]]; then
         echo -e "${C_YELLOW}File '${archive_name}' already exists. Appending timestamp...${C_RESET}"
-        archive_name="${archive_name%.rar}_$(date +'%H%M%S').rar"
+        archive_name="${archive_name%.7z}_$(date +'%H%M%S').7z"
         archive_path="$(dirname "$backup_dir")/${archive_name}"
     fi
 
-    local rar_split_opt=""
+    local archive_split_opt=""
     local total_size
     total_size=$(du -sb "$backup_dir" | awk '{print $1}')
     
@@ -1501,14 +1507,14 @@ volume_smart_backup_main() {
     while true; do
         read -p "${C_YELLOW}Enter choice [${C_RESET}1${C_YELLOW}-${C_RESET}4${C_YELLOW}]: ${C_RESET}" split_choice
         case "$split_choice" in
-            1) rar_split_opt=""; break ;;
-            2) rar_split_opt="-v4095m"; echo -e "${C_CYAN}-> Splitting at 4GB (FAT32 safe).${C_RESET}"; break ;;
-            3) rar_split_opt="-v8192m"; echo -e "${C_CYAN}-> Splitting at 8GB.${C_RESET}"; break ;;
+            1) archive_split_opt=""; break ;;
+            2) archive_split_opt="-v4095m"; echo -e "${C_CYAN}-> Splitting at 4GB (FAT32 safe).${C_RESET}"; break ;;
+            3) archive_split_opt="-v8192m"; echo -e "${C_CYAN}-> Splitting at 8GB.${C_RESET}"; break ;;
             4) 
                 read -p "${C_YELLOW}Enter size (e.g., ${C_RESET}500m ${C_YELLOW}or ${C_RESET}2g${C_YELLOW}): ${C_RESET}" custom_size
                 if [[ "$custom_size" =~ ^[0-9]+[mMgG]$ ]]; then
                     local safe_size="${custom_size,,}"
-                    rar_split_opt="-v${safe_size}"
+                    archive_split_opt="-v${safe_size}"
                     echo -e "${C_CYAN}-> Splitting at ${C_GREEN}${safe_size}${C_CYAN} (Binary units).${C_RESET}"
                     break
                 else
@@ -1519,28 +1525,31 @@ volume_smart_backup_main() {
         esac
     done
 
-    echo -e "\n${C_YELLOW}Creating secure RAR archive: ${C_GREEN}${archive_path}${C_RESET}"
+    echo -e "\n${C_YELLOW}Creating secure 7z archive: ${C_GREEN}${archive_path}${C_RESET}"
     echo -e "${C_GRAY}(Please wait, this may take time...)${C_RESET}"
 
-    local rar_log; rar_log=$(mktemp)
-    local rar_success=false
+    local archive_log; archive_log=$(mktemp)
+    local archive_success=false
 
-    local rar_cmd=(rar a -ep1)
-    [[ -n "$rar_split_opt" ]] && rar_cmd+=("$rar_split_opt")
-    rar_cmd+=("-m${RAR_COMPRESSION_LEVEL:-3}" "-k" "-y")
+    local sevenz_cmd=(7z a -t7z)
+    [[ -n "$archive_split_opt" ]] && sevenz_cmd+=("$archive_split_opt")
+
+    # Map compression: 7z levels are 0-9. (mx=0 is copy, mx=9 is ultra). 
+    # Your default 3 is "Fast" in 7z, which is fine.
+    sevenz_cmd+=("-mx=${ARCHIVE_COMPRESSION_LEVEL:-3}" "-y")
 
     if [[ -n "$archive_password" ]]; then
-        rar_cmd+=("-hp")
-        rar_cmd+=(-- "${archive_path}" "${backup_dir}")
-        if printf '%s' "$archive_password" | "${rar_cmd[@]}" &> "$rar_log"; then
-            rar_success=true
-        fi
-    else
-        rar_cmd+=(-- "${archive_path}" "${backup_dir}")
-        if "${rar_cmd[@]}" &> "$rar_log"; then
-            rar_success=true
-        fi
+        # -mhe=on encrypts headers (filenames)
+        sevenz_cmd+=("-mhe=on" "-p${archive_password}")
     fi
+    
+    sevenz_cmd+=("--" "${archive_path}" "${backup_dir}")
+
+    log "Creating 7z archive: $(basename "${archive_path}")"
+    
+    # Execute
+    "${sevenz_cmd[@]}" &> "$archive_log"
+    local run_exit_code=$?  # Capture the exit code here
 
     while IFS= read -r line || [ -n "$line" ]; do
         if [[ "$line" =~ (Done|OK|All OK) ]]; then
@@ -1554,23 +1563,31 @@ volume_smart_backup_main() {
         else
             echo "$line"
         fi
-    done < "$rar_log"
+    done < "$archive_log"
 
-    cat "$rar_log" >> "${LOG_FILE:-/dev/null}"
-    rm "$rar_log"
+    cat "$archive_log" >> "${LOG_FILE:-/dev/null}"
+    rm "$archive_log"
 
-    if $rar_success; then
-        echo -e "\n${C_GREEN}RAR archive created successfully.${C_RESET}\n"
+    # Trust the exit code for success
+    if [ $run_exit_code -eq 0 ]; then
+        archive_success=true
+    fi
+
+    if $archive_success; then
+        echo -e "\n${C_GREEN}7z archive created successfully.${C_RESET}\n"
 
         local file_to_verify="$archive_path"
 
-        if [[ ! -f "$file_to_verify" ]] && [[ -f "${archive_path%.rar}.part1.rar" ]]; then
-            file_to_verify="${archive_path%.rar}.part1.rar"
-            echo -e "${C_CYAN}Detected split archive. Verifying part 1 sequence...${C_RESET}"
+        # Check if single file exists. If not, check for 7-Zip split format (.001)
+        if [[ ! -f "$file_to_verify" ]]; then
+            if [[ -f "${archive_path}.001" ]]; then
+                file_to_verify="${archive_path}.001"
+                echo -e "${C_CYAN}Detected split archive. Verifying part 1 sequence...${C_RESET}"
+            fi
         fi
 
     echo -e "${C_YELLOW}Verifying archive integrity...${C_RESET}"
-    local verify_cmd=(rar t)
+    local verify_cmd=(7z t)
     # We do NOT add "-pPassword" here to avoid leaking it in process lists.
     
     verify_cmd+=("--" "$file_to_verify")
@@ -1579,7 +1596,7 @@ volume_smart_backup_main() {
 
     if [[ -n "$archive_password" ]]; then
         # Pipe the password to stdin. Since we used -hp (encrypt headers) during creation,
-        # rar will prompt for a password immediately. We feed it via printf.
+        # 7z will prompt for a password immediately. We feed it via printf.
         # Note: We add \n here because interactive prompts usually expect an Enter key.
         if printf '%s\n' "$archive_password" | "${verify_cmd[@]}" &>/dev/null; then
             verify_success=true
@@ -1617,12 +1634,13 @@ volume_smart_backup_main() {
             esac
         done
     else
-        echo -e "\n${C_LIGHT_RED}Error: Failed to create RAR archive.${C_RESET}"
+        echo -e "\n${C_LIGHT_RED}Error: Failed to create 7z archive.${C_RESET}"
     fi
 }
 
 volume_restore_main() {
     clear; echo -e "${C_GREEN}Starting Docker Volume Restore...${C_RESET}"
+    log "--- Starting Volume Restore Session ---"
     ensure_backup_image || return
     
     mapfile -t backup_files < <(find "$RESTORE_LOCATION" -type f \( -name "*.tar.zst" -o -name "*.tar.gz" \) 2>/dev/null | sort)
@@ -1648,6 +1666,8 @@ volume_restore_main() {
     for backup_file in "${selected_files[@]}"; do
         local base_name; base_name=$(basename "$backup_file"); local volume_name="${base_name%%.tar.*}"
         echo -e "\n${C_YELLOW}Restoring ${C_CYAN}${base_name}${C_RESET} to volume ${C_CYAN}${volume_name}${C_RESET}..."
+
+        log "Restoring volume '${volume_name}' from archive '${base_name}'"
 
         if ! $SUDO_CMD docker volume inspect "$volume_name" &>/dev/null; then
             echo "   -> Volume does not exist. Creating..."
@@ -1704,6 +1724,7 @@ system_prune_main() {
     read -rp "$(printf "${C_LIGHT_RED}This action is IRREVERSIBLE. Are you sure? [y/N]: ${C_RESET}")" confirm
     if [[ "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then
         echo -e "\n${C_YELLOW}Pruning system...${C_RESET}"
+        log "Running Docker System Prune..."
         execute_and_log $SUDO_CMD docker system prune -af
         echo -e "\n${C_GREEN}${TICKMARK} System prune complete.${C_RESET}"
     else
@@ -1797,10 +1818,18 @@ log_remover_main() {
     echo -e "\n${C_GREEN}Deletion complete.${C_RESET}"
 }
 
+log_manager_configure_retention() {
+    clear
+    echo -e "${C_YELLOW} --- Configure Log Retention ---${C_RESET}\n"
+    _update_config_value "LOG_RETENTION_DAYS" "Log file retention period (days, 0 to disable)" "${LOG_RETENTION_DAYS:-30}" "30"
+    echo -e "\n${C_GREEN}Retention policy updated.${C_RESET}"
+}
+
 log_manager_menu() {
     local options=(
         "View Logs"
         "Delete Logs"
+        "Configure Retention Period"
     )
     while true; do
         print_standard_menu "Log Manager" options "RQ"
@@ -1808,6 +1837,7 @@ log_manager_menu() {
         case "$choice" in
             1) _log_viewer_select_and_view ;;
             2) log_remover_main; echo -e "\nPress Enter to return..."; read -r ;;
+            3) log_manager_configure_retention; echo -e "\nPress Enter to return..."; read -r ;;
             [rR]) return ;;
             [qQ]) exit 0 ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
@@ -1820,22 +1850,22 @@ update_secure_archive_settings() {
     clear
     echo -e "${C_YELLOW}--- Update Secure Archive Password ---${C_RESET}\n"
     
-    local rar_pass_1 rar_pass_2 ENCRYPTED_RAR_PASSWORD=""
+    local archive_pass_1 archive_pass_2 ENCRYPTED_ARCHIVE_PASSWORD=""
     while true; do
-        read -sp "Enter a new password (leave blank to remove, or type 'cancel' to exit): " rar_pass_1; echo
+        read -sp "Enter a new password (leave blank to remove, or type 'cancel' to exit): " archive_pass_1; echo
         
-        if [[ "${rar_pass_1,,}" == "cancel" ]]; then
+        if [[ "${archive_pass_1,,}" == "cancel" ]]; then
             echo -e "${C_YELLOW}Operation cancelled. No changes were made.${C_RESET}"
             return
         fi
 
-        if [[ -z "$rar_pass_1" ]]; then
+        if [[ -z "$archive_pass_1" ]]; then
             break
         fi
-        read -sp "Confirm new password: " rar_pass_2; echo
+        read -sp "Confirm new password: " archive_pass_2; echo
 
-        if [[ "$rar_pass_1" == "$rar_pass_2" ]]; then
-            ENCRYPTED_RAR_PASSWORD=$(encrypt_pass "${rar_pass_1}")
+        if [[ "$archive_pass_1" == "$archive_pass_2" ]]; then
+            ENCRYPTED_ARCHIVE_PASSWORD=$(encrypt_pass "${archive_pass_1}")
             break
         else
             echo -e "${C_RED}Passwords do not match. Please try again.${C_RESET}"
@@ -1844,17 +1874,17 @@ update_secure_archive_settings() {
 
     echo -e "\n${C_YELLOW}Updating configuration file...${C_RESET}"
     local new_config_line
-    new_config_line=$(printf "ENCRYPTED_RAR_PASSWORD=%q" "${ENCRYPTED_RAR_PASSWORD}")
+    new_config_line=$(printf "ENCRYPTED_ARCHIVE_PASSWORD=%q" "${ENCRYPTED_ARCHIVE_PASSWORD}")
 
-    sed -i '/^ENCRYPTED_RAR_PASSWORD=/d' "$CONFIG_FILE"
+    sed -i '/^ENCRYPTED_ARCHIVE_PASSWORD=/d' "$CONFIG_FILE"
 
-    local anchor="# RAR Password is encrypted using a machine-specific key."
+    local anchor="# Password is encrypted using a machine-specific key."
     sed -i "\|$anchor|a ${new_config_line}" "$CONFIG_FILE"
 
     chmod 600 "$CONFIG_FILE" # Re-apply security
     load_config "$CONFIG_FILE"
 
-    if [[ -z "$ENCRYPTED_RAR_PASSWORD" ]]; then
+    if [[ -z "$ENCRYPTED_ARCHIVE_PASSWORD" ]]; then
         echo -e "${C_GREEN}${TICKMARK} Default archive password has been removed.${C_RESET}"
     else
         echo -e "${C_GREEN}${TICKMARK} Archive password updated successfully.${C_RESET}"
@@ -2129,7 +2159,7 @@ settings_manager_menu() {
     local log_dir_def="/home/${CURRENT_USER}/logs/dtools"
     local backup_image_def="docker/alpine-tar-zstd:latest"
     local explore_image_def="debian:trixie-slim"
-    local rar_level_def="3"
+    local archive_level_def="3"
 
     local options=(
         "Path Settings"
@@ -2175,7 +2205,7 @@ settings_manager_menu() {
                 clear; echo -e "${C_YELLOW}--- Archive Settings ---${C_RESET}"
                 
                 update_secure_archive_settings
-                _update_config_value "RAR_COMPRESSION_LEVEL" "Default RAR Compression Level (0-5)" "${RAR_COMPRESSION_LEVEL:-3}" "$rar_level_def"
+                _update_config_value "ARCHIVE_COMPRESSION_LEVEL" "Default 7z Compression Level (Copy:0 - Ultra:9)" "${ARCHIVE_COMPRESSION_LEVEL:-3}" "$archive_level_def"
 
                 echo -e "\n${C_CYAN}Archive settings updated. Press Enter...${C_RESET}"; read -r
                 ;;

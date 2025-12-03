@@ -13,7 +13,7 @@ A powerful, self-hosted Bash script designed to simplify the management of Docke
 ### 💾 Volume & Backup Manager
 - **Smart Backups:** Automatically detects which volumes belong to which application. Stops the app, backs up the volume, and restarts the app to ensure data consistency.
 - **Standalone Backups:** Detects and backs up volumes not attached to specific projects.
-- **Secure Archives:** Compresses backups using `tar` + `zstd`. Optionally creates encrypted, password-protected RAR archives (split-volume supported).
+- **Secure Archives:** Compresses backups using `tar` + `zstd`. Optionally creates encrypted, password-protected 7-Zip archives (AES-256, split-volume supported).
 - **Volume Explorer:** Mounts a volume into a temporary interactive shell to inspect files without attaching to the main container.
 - **Restore Wizard:** Easily restore volumes from previous backups.
 
@@ -29,7 +29,7 @@ A powerful, self-hosted Bash script designed to simplify the management of Docke
 The script runs on Debian-based systems and requires:
 - **Docker** & **Docker Compose V2**
 - `openssl` (for password encryption)
-- `rar` (optional, for creating secure archives)
+- `p7zip-full` (optional, for creating secure archives)
 - Root/Sudo privileges
 
 ## 🛠️ Installation
