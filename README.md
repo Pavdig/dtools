@@ -19,12 +19,12 @@ A powerful, self-hosted Bash script designed to simplify the management of Docke
 - **Restore Wizard:** Easily restore volumes from previous backups.
 
 ### ⚙️ Automation & Utilities
-- **Shell Integration:** Easily create and manage a `dtools` alias for your shell (`.bashrc`/`.zshrc`) to run the tool from anywhere.
+- **Shell Integration:** Easily create and manage a `dtools` alias. Auto-detects your shell (`bash`/`zsh`), validates alias names to prevent conflicts, and creates configuration files if they are missing.
 - **Cron Integration:** Built-in scheduler for automatic app updates and unused image cleanup.
 - **Log Management:** Centralized log viewer with auto-pruning (retention policies).
 - **System Prune:** Guided clean-up of stopped containers, unused networks, and build caches.
 - **Security:** Encrypts sensitive configuration passwords (like RAR passwords) using a machine-specific key (OpenSSL).
-- **Smart Setup:** Auto-detects missing dependencies and corrupted configurations, offering self-repair and auto-installation of tools like `openssl` and `7z`.
+- **Smart Setup:** Auto-detects missing dependencies, verifies Docker Daemon health, and performs configuration integrity checks on startup to auto-correct invalid values (like corrupted integers).
 
 ## 📋 Prerequisites
 
@@ -84,6 +84,8 @@ The script supports non-interactive flags for scheduled tasks:
 Configuration is stored securely in `~/.config/dtools/config.conf`. You can change settings (paths, ignored volumes, helper images) directly via the **Utilities > Manage Settings** menu inside the script.
 
 **Safe Reset:** If you make a mistake while editing a setting (like a helper image tag), simply type `reset` when prompted to revert that setting to its original default value.
+
+The script includes strict input validation (path autocompletion, integer ranges) to prevent invalid configurations from being saved.
 
 ## ⚠️ Disclaimer
 This tool performs operations that modify your Docker containers and volumes. While it includes safety checks (like dry-runs and confirmations), always ensure you have valid backups before performing system prunes or volume restorations.

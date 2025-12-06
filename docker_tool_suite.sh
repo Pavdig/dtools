@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.4.9.6
+SCRIPT_VERSION=v1.4.9.7
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -75,6 +75,30 @@ load_config() {
     # Source the sanitized temporary file
     . "$temp_cfg"
     rm -f "$temp_cfg"
+}
+
+validate_loaded_config() {
+    local config_changed=false
+
+    # Validate Retention (Integer, 0 to 3650)
+    if [[ ! "${LOG_RETENTION_DAYS}" =~ ^[0-9]+$ ]] || [ "${LOG_RETENTION_DAYS}" -gt 3650 ]; then
+        echo -e "${C_RED}Warning: Invalid LOG_RETENTION_DAYS detected ('${LOG_RETENTION_DAYS}').${C_RESET}"
+        echo -e "${C_YELLOW}-> Correction applied to config file (Reset to 30).${C_RESET}"
+        LOG_RETENTION_DAYS="30"
+        sed -i "/^LOG_RETENTION_DAYS=/c\LOG_RETENTION_DAYS=\"30\"" "$CONFIG_FILE"
+    fi
+
+    # Validate Compression Level (Integer, 0-9)
+    if [[ ! "${ARCHIVE_COMPRESSION_LEVEL}" =~ ^[0-9]+$ ]] || [ "${ARCHIVE_COMPRESSION_LEVEL}" -gt 9 ]; then
+        echo -e "${C_RED}Warning: Invalid ARCHIVE_COMPRESSION_LEVEL detected ('${ARCHIVE_COMPRESSION_LEVEL}').${C_RESET}"
+        echo -e "${C_YELLOW}-> Correction applied to config file (Reset to 3).${C_RESET}"
+        ARCHIVE_COMPRESSION_LEVEL="3"
+        sed -i "/^ARCHIVE_COMPRESSION_LEVEL=/c\ARCHIVE_COMPRESSION_LEVEL=\"3\"" "$CONFIG_FILE"
+    fi
+
+    # Validate Paths (Basic check to ensure they aren't empty)
+    if [[ -z "${APPS_BASE_PATH}" ]]; then APPS_BASE_PATH="/home/${CURRENT_USER}/apps"; fi
+    if [[ -z "${BACKUP_LOCATION}" ]]; then BACKUP_LOCATION="/home/${CURRENT_USER}/backups"; fi
 }
 
 # --- Unified Configuration Paths ---
@@ -233,10 +257,20 @@ check_deps() {
     log "Checking dependencies..." "${C_GRAY}Checking dependencies...${C_RESET}"
     local error_found=false
 
+    # 1. Check binaries
     if ! command -v docker &>/dev/null; then log "Error: Docker not found." "${C_RED}Error: Docker is not installed...${C_RESET}"; error_found=true; fi
     if ! $SUDO_CMD docker compose version &>/dev/null; then log "Error: Docker Compose V2 not found." "${C_RED}Error: Docker Compose V2 not available...${C_RESET}"; error_found=true; fi
     if ! command -v openssl &>/dev/null; then log "Error: openssl not found." "${C_RED}Error: 'openssl' is not installed (required for password encryption)...${C_RESET}"; error_found=true; fi
     if ! command -v 7z &>/dev/null; then log "Warning: '7z' command not found." "${C_YELLOW}Warning: '7z' is not installed (required for secure archives)...${C_RESET}"; fi
+
+    # Check Daemon connectivity
+    if ! $SUDO_CMD docker info >/dev/null 2>&1; then
+        log "Error: Cannot connect to Docker Daemon." 
+        echo -e "${C_RED}Error: Unable to connect to the Docker Daemon.${C_RESET}"
+        echo -e "${C_YELLOW}Please ensure the Docker service is running (e.g., 'sudo systemctl start docker') and the user has permissions.${C_RESET}"
+        error_found=true
+    fi
+
     if $error_found; then exit 1; fi
     log "Dependencies check passed." ""
 }
@@ -323,19 +357,19 @@ configure_shell_alias() {
     local shell_rc=""
     local comment_line="# Alias added by Docker Tool Suite"
 
-    # Detect Shell Config File
     if [[ -f "${user_home}/.zshrc" ]]; then
         shell_rc="${user_home}/.zshrc"
     elif [[ -f "${user_home}/.bashrc" ]]; then
         shell_rc="${user_home}/.bashrc"
     else
-        echo -e "${C_RED}Error: Could not detect .zshrc or .bashrc for user ${CURRENT_USER}.${C_RESET}"
-        read -p "Press Enter to continue..."
-        return
+        echo -e "${C_YELLOW}No shell configuration found. Creating .bashrc...${C_RESET}"
+        touch "${user_home}/.bashrc"
+        chown "${CURRENT_USER}:${CURRENT_USER}" "${user_home}/.bashrc"
+        shell_rc="${user_home}/.bashrc"
     fi
 
     clear
-    echo -e "${C_YELLOW}--- Configure Shell Alias ---${C_RESET}"
+    echo -e "${C_YELLOW}--- Configure Shell Alias ---${C_RESET}\n"
     echo -e "Target User:   ${C_GREEN}${CURRENT_USER}${C_RESET}"
     echo -e "Config File:   ${C_GREEN}${shell_rc}${C_RESET}"
     echo -e "Script Path:   ${C_CYAN}${SCRIPT_PATH}${C_RESET}\n"
@@ -353,50 +387,55 @@ configure_shell_alias() {
             read -p "Enter alias name [${C_GREEN}${default_alias}${C_RESET}]: " alias_name
             alias_name=${alias_name:-$default_alias}
 
-            # Define the new line
+            # Validation for alias name (Alphanumeric and underscore only)
+            if [[ ! "$alias_name" =~ ^[a-zA-Z0-9_]+$ ]]; then
+                echo -e "\n${C_RED}Error: Invalid alias name. Use only letters, numbers, and underscores.${C_RESET}"
+                echo -e "${C_GRAY}Characters like '/' or spaces are not allowed.${C_RESET}"; sleep 2
+                return
+            fi
+
+            # Check if alias is already taken by something else
+            if grep -q "^alias ${alias_name}=" "$shell_rc" && ! grep -q "^alias ${alias_name}='${SCRIPT_PATH}'" "$shell_rc"; then
+                echo -e "\n${C_RED}Error: The alias '${alias_name}' is already defined in ${shell_rc} pointing to something else.${C_RESET}"
+                echo -e "${C_YELLOW}Please choose a different name.${C_RESET}"; sleep 2
+                return
+            fi
+
             local new_alias_line="alias ${alias_name}='${SCRIPT_PATH}'"
             
-            # Clean up: Remove old comment if it exists
-            sed -i "/^${comment_line}/d" "$shell_rc"
+            # Safe removal of OLD alias to this script (rebuild file)
+            local temp_rc; temp_rc=$(mktemp)
             
-            # Clean up: Remove any existing alias with this specific name
-            # We use sed with /d to delete lines starting with "alias name="
-            sed -i "/^alias ${alias_name}=/d" "$shell_rc"
-
-            # Append the comment and the alias
-            echo "$comment_line" >> "$shell_rc"
-            echo "$new_alias_line" >> "$shell_rc"
+            # Filter out the specific comment and any alias pointing to THIS script
+            grep -v -F "$comment_line" "$shell_rc" | grep -v "alias .*='${SCRIPT_PATH}'" > "$temp_rc"
             
-            # Fix permissions
+            # Append new
+            echo "$comment_line" >> "$temp_rc"
+            echo "$new_alias_line" >> "$temp_rc"
+            
+            mv "$temp_rc" "$shell_rc"
             chown "${CURRENT_USER}:${CURRENT_USER}" "$shell_rc"
             
             echo -e "\n${C_GREEN}${TICKMARK} Alias '${alias_name}' added to ${shell_rc}!${C_RESET}"
             echo -e "${C_GRAY}NOTE: Run 'source ${shell_rc}' or restart your terminal to use it.${C_RESET}"
             ;;
         2)
-            # Check if alias exists before removing
-            if ! grep -Fq "$comment_line" "$shell_rc" && ! grep -q "alias .*='${SCRIPT_PATH}'" "$shell_rc"; then
+            if ! grep -q "alias .*='${SCRIPT_PATH}'" "$shell_rc"; then
                 echo -e "\n${C_YELLOW}No alias found to remove in ${C_GREEN}${shell_rc}${C_YELLOW}.${C_RESET}"
-                echo -e "${C_GRAY}(The alias might have been removed manually or wasn't set up yet.)${C_RESET}\n"
-                sleep 1
-                return
+                sleep 1; return
             fi
 
             echo -e "\n${C_YELLOW}Removing alias...${C_RESET}"
             
-            # Remove the specific comment line
-            sed -i "/^${comment_line}/d" "$shell_rc"
+            # Safe removal logic using grep
+            local temp_rc; temp_rc=$(mktemp)
+            grep -v -F "$comment_line" "$shell_rc" | grep -v "alias .*='${SCRIPT_PATH}'" > "$temp_rc"
+            mv "$temp_rc" "$shell_rc"
             
-            # Remove lines where the alias points to THIS script path.
-            # We use @ as a delimiter for sed because $SCRIPT_PATH contains slashes (/).
-            sed -i "\@^alias .*='${SCRIPT_PATH}'@d" "$shell_rc"
-            
-            # Fix permissions
             chown "${CURRENT_USER}:${CURRENT_USER}" "$shell_rc"
             echo -e "${C_GREEN}${TICKMARK} Alias removed successfully.${C_RESET}"
             ;;
-        *)
-            return ;;
+        *) return ;;
     esac
 }
 
@@ -596,7 +635,7 @@ initial_setup() {
         echo "# Image used for the interactive shell explorer"
         printf "EXPLORE_IMAGE=\"%s\"\n" "${EXPLORE_IMAGE}"
         echo
-        echo "# List of volumes to ignore during backup."
+        echo "# List of volumes to ignore during operations."
         echo -n "IGNORED_VOLUMES=("
         if [ ${#selected_ignored_volumes[@]} -gt 0 ]; then
             printf "\n"; for vol in "${selected_ignored_volumes[@]}"; do echo "    \"$vol\""; done
@@ -607,7 +646,7 @@ initial_setup() {
         fi
         echo ")"
         echo
-        echo "# List of images to ignore during updates (e.g., custom builds or pinned versions)."
+        echo "# List of images to ignore during operations."
         echo -n "IGNORED_IMAGES=("
         if [ ${#selected_ignored_images[@]} -gt 0 ]; then
             printf "\n"; for img in "${selected_ignored_images[@]}"; do echo "    \"$img\""; done
@@ -667,19 +706,19 @@ setup_cron_job() {
     while true; do
         clear
         echo -e "${C_YELLOW}Choose a schedule for the app updater (for user: ${C_GREEN}$cron_target_user${C_YELLOW}):${C_RESET}\n"
-        echo "   --- Special & Frequent ---           --- Daily & Weekly ---"
+        echo -e "   ${C_GREEN}--- Special & Frequent ---           --- Daily & Weekly ---${C_RESET}"
         echo "   1) At every reboot                   6) Daily (at 4 AM)"
         echo "   2) Every hour                        7) Weekly (Sunday at midnight)"
         echo "   3) Every 6 hours                     8) Weekly (Saturday at 4 AM)"
         echo "   4) Every 12 hours"
         echo "   5) Daily (at midnight)"
         echo
-        echo "   --- Monthly & Custom ---"
+        echo "   ${C_GREEN}--- Monthly & Custom ---${C_RESET}"
         echo "   9) Monthly (1st of month at 4 AM)"
-        echo "  10) Custom"
-        echo "  11) Cancel"
+        echo -e "  ${C_CYAN}10) Custom${C_RESET}"
+        echo -e "  ${C_RED}11) Cancel${C_RESET}"
         echo
-        read -p "Enter your choice [1-11]: " choice
+        read -p "${C_YELLOW}Enter your choice [1-11]: ${C_RESET}" choice
         case $choice in
             1) cron_schedule="@reboot"; break ;;
             2) cron_schedule="0 * * * *"; break ;;
@@ -697,14 +736,16 @@ setup_cron_job() {
         esac
     done
 
-    echo -e "\n${C_YELLOW}Adding job to root's crontab...${C_RESET}"
+    echo -e "\n${C_YELLOW}Adding job to root's crontab...${C_RESET}\n"
     local cron_command="$cron_schedule $SUDO_CMD SUDO_USER=${CURRENT_USER} $SCRIPT_PATH update --cron"
     local cron_comment="# Added by Docker Tool Suite to update application images"
     
     local current_crontab; current_crontab=$($SUDO_CMD crontab -u "$cron_target_user" -l 2>/dev/null || true)
     
     if echo "$current_crontab" | grep -Fq "$SCRIPT_PATH"; then
-        echo -e "${C_YELLOW}A cron job for this script already exists. Skipping.${C_RESET}"
+        echo -e "${C_CYAN}A cron job for this task already exists."
+        echo -e "${C_GRAY}Please edit it manually (sudo crontab -e).${C_RESET}"
+        sleep 1
     else
         local new_crontab
         new_crontab=$(printf "%s\n%s\n%s\n" "$current_crontab" "$cron_comment" "$cron_command")
@@ -1951,7 +1992,8 @@ log_remover_main() {
 log_manager_configure_retention() {
     clear
     echo -e "${C_YELLOW} --- Configure Log Retention ---${C_RESET}\n"
-    _update_config_value "LOG_RETENTION_DAYS" "Log file retention period (days, 0 to disable)" "${LOG_RETENTION_DAYS:-30}" "30"
+    # Added Limits: Min 0, Max 3650 (10 years)
+    _update_config_value "LOG_RETENTION_DAYS" "Log file retention period (days, 0 to disable)" "${LOG_RETENTION_DAYS:-30}" "30" "int" "0" "3650"
     echo -e "\n${C_GREEN}Retention policy updated.${C_RESET}"
 }
 
@@ -1975,32 +2017,83 @@ log_manager_menu() {
     done
 }
 
+archive_settings_menu() {
+    local archive_level_def="3"
+    
+    while true; do
+        clear
+        echo -e "${C_RESET}=============================================="
+        echo -e " ${C_GREEN}Archive Settings Manager"
+        echo -e "${C_RESET}=============================================="
+        echo -e " ${C_YELLOW}Current Settings:${C_RESET}"
+        echo -e " Compression Level: ${C_CYAN}${ARCHIVE_COMPRESSION_LEVEL} ${C_GRAY}(0-9)${C_RESET}"
+        if [[ -n "${ENCRYPTED_ARCHIVE_PASSWORD}" ]]; then
+            echo -e " Default Password:  ${C_GREEN}[SET]${C_RESET}"
+        else
+            echo -e " Default Password:  ${C_GRAY}[NOT SET]${C_RESET}"
+        fi
+        echo -e "${C_RESET}----------------------------------------------"
+        
+        echo -e " ${C_YELLOW}Options:${C_RESET}"
+        echo -e " 1) ${C_CYAN}Change Compression Level${C_RESET}"
+        echo -e " 2) ${C_CYAN}Change Default Password${C_RESET}"
+        echo -e " 3) ${C_YELLOW}Return to Previous Menu${C_RESET}"
+        echo -e "----------------------------------------------${C_RESET}"
+        
+        read -p "Enter choice: " sub_choice
+        case "$sub_choice" in
+            1)
+                echo ""
+                # Added Limits: Min 0, Max 9
+                _update_config_value "ARCHIVE_COMPRESSION_LEVEL" "Compression Level (Copy:0 - Ultra:9)" "${ARCHIVE_COMPRESSION_LEVEL:-3}" "$archive_level_def" "int" "0" "9"
+                echo -e "\n${C_CYAN}Press Enter...${C_RESET}"; read -r
+                ;;
+            2)
+                update_secure_archive_settings
+                echo -e "\n${C_CYAN}Press Enter...${C_RESET}"; read -r
+                ;;
+            3) return ;;
+            *) echo -e "${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
+        esac
+    done
+}
+
 update_secure_archive_settings() {
     check_root
     clear
-    echo -e "${C_YELLOW}--- Update Secure Archive Password ---${C_RESET}\n"
+    echo -e "${C_GREEN}--- Update Secure Archive Password ---${C_RESET}\n"
 
     if ! ensure_tool_installed "openssl" "openssl" "encrypting passwords"; then
         read -p "Press Enter to return..."
         return
     fi
 
-    local archive_pass_1 archive_pass_2 ENCRYPTED_ARCHIVE_PASSWORD=""
+    local archive_pass_1 archive_pass_2
+    local new_hash=""
+
     while true; do
-        read -sp "Enter a new password (leave blank to remove, or type 'cancel' to exit): " archive_pass_1; echo
+        read -sp "${C_YELLOW}Enter a new password (leave blank to remove, or type '${C_CYAN}cancel${C_YELLOW}' to exit)${C_RESET}: " archive_pass_1; echo
         
-        if [[ "${archive_pass_1,,}" == "cancel" ]]; then
-            echo -e "${C_YELLOW}Operation cancelled. No changes were made.${C_RESET}"
+        if [[ "${archive_pass_1,,}" == "cancel" || "${archive_pass_1,,}" == "CANCEL" ]]; then
+            echo -e "\n${C_GRAY}Operation cancelled. No changes were made.${C_RESET}"
             return
         fi
 
         if [[ -z "$archive_pass_1" ]]; then
-            break
+            read -p "${C_RED}You left the password blank. ${C_YELLOW}Remove default encryption? (${C_RED}y${C_YELLOW}/${C_GREEN}N${C_YELLOW}): ${C_RESET}" confirm_remove
+            if [[ "${confirm_remove,,}" =~ ^(y|Y|yes|YES)$ ]]; then
+                new_hash=""
+                break
+            else
+                echo -e "${C_GRAY}Operation canceled.${C_RESET}"
+                return
+            fi
         fi
+
         read -sp "Confirm new password: " archive_pass_2; echo
 
         if [[ "$archive_pass_1" == "$archive_pass_2" ]]; then
-            ENCRYPTED_ARCHIVE_PASSWORD=$(encrypt_pass "${archive_pass_1}")
+            new_hash=$(encrypt_pass "${archive_pass_1}")
             break
         else
             echo -e "${C_RED}Passwords do not match. Please try again.${C_RESET}"
@@ -2009,14 +2102,16 @@ update_secure_archive_settings() {
 
     echo -e "\n${C_YELLOW}Updating configuration file...${C_RESET}"
     local new_config_line
-    new_config_line=$(printf "ENCRYPTED_ARCHIVE_PASSWORD=%q" "${ENCRYPTED_ARCHIVE_PASSWORD}")
+    new_config_line=$(printf "ENCRYPTED_ARCHIVE_PASSWORD=%q" "${new_hash}")
 
     sed -i '/^ENCRYPTED_ARCHIVE_PASSWORD=/d' "$CONFIG_FILE"
 
     local anchor="# Password is encrypted using a machine-specific key."
     sed -i "\|$anchor|a ${new_config_line}" "$CONFIG_FILE"
 
-    chmod 600 "$CONFIG_FILE" # Re-apply security
+    chmod 600 "$CONFIG_FILE"
+    
+    # Updates the global variable immediately
     load_config "$CONFIG_FILE"
 
     if [[ -z "$ENCRYPTED_ARCHIVE_PASSWORD" ]]; then
@@ -2107,7 +2202,7 @@ setup_unused_images_cron_job() {
     if [[ ! "$(echo "${schedule_now:-n}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|Y|yes|YES)$ ]]; then
         echo -e "${C_YELLOW}Skipping cron job setup.${C_RESET}"; return
     fi
-    
+
     local cron_target_user="root"
     echo "The script needs Docker permissions to run. We recommend running the scheduled task as 'root'."
     read -p "Run the scheduled task as 'root'? (Y/n): " confirm_root
@@ -2119,12 +2214,12 @@ setup_unused_images_cron_job() {
     while true; do
         clear
         echo -e "${C_YELLOW}Choose a schedule for the unused image cleaner (for user: ${C_GREEN}$cron_target_user${C_YELLOW}):${C_RESET}\n"
-        echo "   --- Daily & Weekly ---                  --- Monthly & Custom ---"
+        echo -e "   ${C_GREEN}--- Daily & Weekly ---                  --- Monthly & Custom ---${C_RESET}"
         echo "   1) Daily (at 3 AM)                      5) Bi-weekly (1st and 15th at 3 AM)"
         echo "   2) Every 3 days (at 3 AM)               6) Monthly (1st of month at 3 AM)"
         echo "   3) Weekly (Sunday at 3 AM)"
         echo "   4) Weekly (Saturday at 3 AM)            7) Custom"
-        echo "                                           8) Cancel"
+        echo -e "                                           ${C_RED}8) Cancel${C_RESET}"
         echo
         read -p "Enter your choice [1-8]: " choice
         case $choice in
@@ -2148,7 +2243,9 @@ setup_unused_images_cron_job() {
     local current_crontab; current_crontab=$($SUDO_CMD crontab -u "$cron_target_user" -l 2>/dev/null || true)
     
     if echo "$current_crontab" | grep -Fq "update-unused"; then
-        echo -e "${C_YELLOW}A cron job for this task already exists. Skipping.${C_RESET}"
+        echo -e "${C_CYAN}A cron job for this task already exists."
+        echo -e "${C_GRAY}Please edit it manually (sudo crontab -e).${C_RESET}"
+        sleep 1
     else
         local new_crontab
         new_crontab=$(printf "%s\n%s\n%s\n" "$current_crontab" "$cron_comment" "$cron_command")
@@ -2190,7 +2287,10 @@ _update_config_value() {
     local key="$1"
     local prompt_text="$2"
     local current_value="${3-}"
-    local default_value="${4-}" # New optional argument
+    local default_value="${4-}"
+    local validation_type="${5:-text}" # Types: text, int, path
+    local min_val="${6-}" # Optional Min
+    local max_val="${7-}" # Optional Max
 
     # Display helpful context
     if [[ -n "$default_value" ]]; then
@@ -2200,18 +2300,46 @@ _update_config_value() {
     fi
 
     local new_value
-    read -p "$prompt_text [${C_GREEN}${current_value}${C_RESET}]: " new_value
+    while true; do
+        read -e -i "${current_value}" -p "$prompt_text: " input_val
 
-    # Handle the reset keyword
-    if [[ -n "$default_value" && "${new_value,,}" == "reset" ]]; then
-        new_value="$default_value"
-        echo -e "${C_YELLOW}Restoring default value: ${new_value}${C_RESET}"
-    else
-        # Standard behavior: Use input or keep current if empty
-        new_value=${new_value:-$current_value}
-    fi
+        if [[ -n "$default_value" && "${input_val,,}" == "reset" ]]; then
+            new_value="$default_value"
+            echo -e "${C_YELLOW}Restoring default value: ${new_value}${C_RESET}"
+            break
+        else
+            new_value=${input_val:-$current_value}
+        fi
 
-    # Wrap the new value in double quotes for config safety
+        local valid=true
+        case "$validation_type" in
+            int)
+                if [[ ! "$new_value" =~ ^[0-9]+$ ]]; then
+                    echo -e "${C_RED}Error: Input must be a positive integer.${C_RESET}"
+                    valid=false
+                else
+                    if [[ -n "$min_val" && "$new_value" -lt "$min_val" ]]; then
+                        echo -e "${C_RED}Error: Value must be at least $min_val.${C_RESET}"
+                        valid=false
+                    fi
+                    if [[ -n "$max_val" && "$new_value" -gt "$max_val" ]]; then
+                        echo -e "${C_RED}Error: Value cannot exceed $max_val.${C_RESET}"
+                        valid=false
+                    fi
+                fi
+                ;;
+            path)
+                if [[ ! "$new_value" =~ ^(/|~|\.) ]]; then
+                    echo -e "${C_RED}Error: Input must be a valid path (start with /).${C_RESET}"
+                    valid=false
+                fi
+                ;;
+        esac
+
+        if $valid; then break; fi
+    done
+
+    # Wrap in quotes for config file safety
     local replacement="\"${new_value}\""
 
     if grep -q "^${key}=" "$CONFIG_FILE"; then
@@ -2261,26 +2389,41 @@ update_ignored_items() {
     
     local config_key="IGNORED_${item_type^^}"
     local temp_file; temp_file=$(mktemp)
+    local comment_line="# List of ${item_type,,} to ignore during operations."
+    
+    local in_target_block=false
+    
+    while IFS= read -r line || [ -n "$line" ]; do
+        if [[ "$line" == "$comment_line" ]]; then continue; fi
 
-    awk -v key="$config_key" '
-        $0 ~ "^" key "=\\(" { in_block = 1 }
-        !in_block { print }
-        in_block && /^\\)/ { in_block = 0 }
-    ' "$CONFIG_FILE" > "$temp_file"
-    mv "$temp_file" "$CONFIG_FILE"
-
-    {
-        echo "# List of ${item_type,,} to ignore during operations."
-        echo -n "${config_key}=("
-        if [ ${#new_ignored_list[@]} -gt 0 ]; then
-            printf "\n"
-            for item in "${new_ignored_list[@]}"; do echo "    \"$item\""; done
+        if [[ "$line" =~ ^${config_key}=\($ ]]; then
+            in_target_block=true
+            
+            # Print the header comment and the new block
+            echo "$comment_line" >> "$temp_file"
+            echo "${config_key}=(" >> "$temp_file"
+            if [ ${#new_ignored_list[@]} -gt 0 ]; then
+                for item in "${new_ignored_list[@]}"; do 
+                    echo "    \"$item\"" >> "$temp_file"
+                done
+            fi
+            echo ")" >> "$temp_file"
+            continue
         fi
-        echo ")"
-        echo
-    } >> "$CONFIG_FILE"
 
-    chmod 600 "$CONFIG_FILE" # Re-apply security
+        if $in_target_block; then
+            if [[ "$line" =~ ^[[:space:]]*\)$ ]]; then
+                in_target_block=false
+            fi
+            continue
+        fi
+
+        echo "$line" >> "$temp_file"
+    done < "$CONFIG_FILE"
+
+    mv "$temp_file" "$CONFIG_FILE"
+    chmod 600 "$CONFIG_FILE"
+
     echo -e "${C_GREEN}${TICKMARK} Ignored ${item_type,,} list updated successfully.${C_RESET}"
     load_config "$CONFIG_FILE"
 }
@@ -2312,18 +2455,21 @@ settings_manager_menu() {
         
         case "$choice" in
             1)
-                clear; echo -e "${C_YELLOW}--- Path Settings ---${C_RESET}"
-                _update_config_value "APPS_BASE_PATH" "Base Compose Apps Path" "$APPS_BASE_PATH" "$apps_path_def"
-                _update_config_value "MANAGED_SUBDIR" "Managed Apps Subdirectory" "$MANAGED_SUBDIR" "$managed_subdir_def"
-                _update_config_value "BACKUP_LOCATION" "Default Backup Location" "$BACKUP_LOCATION" "$backup_path_def"
-                _update_config_value "RESTORE_LOCATION" "Default Restore Location" "$RESTORE_LOCATION" "$restore_path_def"
-                _update_config_value "LOG_DIR" "Log Directory Path" "$LOG_DIR" "$log_dir_def"
+                clear; echo -e "${C_YELLOW}--- Path Settings ---${C_RESET}\n"
+                _update_config_value "APPS_BASE_PATH" "Base Compose Apps Path" "$APPS_BASE_PATH" "$apps_path_def" "path"
+                _update_config_value "MANAGED_SUBDIR" "Managed Apps Subdirectory" "$MANAGED_SUBDIR" "$managed_subdir_def" "text"
+                _update_config_value "BACKUP_LOCATION" "Default Backup Location" "$BACKUP_LOCATION" "$backup_path_def" "path"
+                _update_config_value "RESTORE_LOCATION" "Default Restore Location" "$RESTORE_LOCATION" "$restore_path_def" "path"
+                _update_config_value "LOG_DIR" "Log Directory Path" "$LOG_DIR" "$log_dir_def" "path"
+                _update_config_value "LOG_SUBDIR_UPDATE" "Update Logs Subdir" "${LOG_SUBDIR_UPDATE:-apps-update-logs}" "apps-update-logs" "text"
+                _update_config_value "LOG_SUBDIR_UNUSED" "Unused Logs Subdir" "${LOG_SUBDIR_UNUSED:-unused-images-update-logs}" "unused-images-update-logs" "text"
+                
                 echo -e "\n${C_CYAN}Path settings updated. Press Enter...${C_RESET}"; read -r
                 ;;
             2)
                 clear; echo -e "${C_YELLOW}--- Helper Image Settings ---${C_RESET}"
-                _update_config_value "BACKUP_IMAGE" "Backup Helper Image" "$BACKUP_IMAGE" "$backup_image_def"
-                _update_config_value "EXPLORE_IMAGE" "Volume Explorer Image" "$EXPLORE_IMAGE" "$explore_image_def"
+                _update_config_value "BACKUP_IMAGE" "Backup Helper Image" "$BACKUP_IMAGE" "$backup_image_def" "text"
+                _update_config_value "EXPLORE_IMAGE" "Volume Explorer Image" "$EXPLORE_IMAGE" "$explore_image_def" "text"
                 echo -e "\n${C_CYAN}Image settings updated. Press Enter...${C_RESET}"; read -r
                 ;;
             3)
@@ -2337,12 +2483,7 @@ settings_manager_menu() {
                 echo -e "\nPress Enter to return..."; read -r
                 ;;
             5)
-                clear; echo -e "${C_YELLOW}--- Archive Settings ---${C_RESET}"
-                
-                update_secure_archive_settings
-                _update_config_value "ARCHIVE_COMPRESSION_LEVEL" "Default 7z Compression Level (Copy:0 - Ultra:9)" "${ARCHIVE_COMPRESSION_LEVEL:-3}" "$archive_level_def"
-
-                echo -e "\n${C_CYAN}Archive settings updated. Press Enter...${C_RESET}"; read -r
+                archive_settings_menu
                 ;;
             6)
                 configure_shell_alias
@@ -2486,6 +2627,7 @@ if [[ -f "$CONFIG_FILE" ]]; then
     chmod 700 "$CONFIG_DIR" 2>/dev/null || true
 
     load_config "$CONFIG_FILE"
+    validate_loaded_config
 
     # Sanity Check: If APPS_BASE_PATH is missing, the config is likely broken
     if [[ -z "${APPS_BASE_PATH-}" ]]; then
