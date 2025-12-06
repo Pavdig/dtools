@@ -9,6 +9,7 @@ A powerful, self-hosted Bash script designed to simplify the management of Docke
 - **Smart Updates:** Checks for image hash changes before recreating containers.
 - **Rollback System:** Keeps a local history of image IDs, allowing you to quickly rollback an application to a previous version if an update fails.
 - **Force Recreate:** Option to force container recreation (useful for config changes).
+- **Interactive Error Recovery:** Automatically detects invalid Docker Compose configurations and prompts you to edit and fix them on the fly.
 
 ### 💾 Volume & Backup Manager
 - **Smart Backups:** Automatically detects which volumes belong to which application. Stops the app, backs up the volume, and restarts the app to ensure data consistency.

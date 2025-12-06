@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.4.9.4
+SCRIPT_VERSION=v1.4.9.5
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -648,6 +648,42 @@ setup_cron_job() {
     fi
 }
 
+validate_and_edit_compose() {
+    local app_name="$1"
+    local compose_file="$2"
+    
+    while true; do
+        local config_output
+        if ! config_output=$($SUDO_CMD docker compose -f "$compose_file" config 2>&1); then
+            log "ERROR: Invalid Compose configuration for '$app_name'."
+            
+            echo -e "${C_LIGHT_RED}Validation failed for '$app_name':${C_RESET}"
+            echo -e "${C_GRAY}----------------------------------------${C_RESET}"
+            echo -e "${config_output}"
+            echo -e "${C_GRAY}----------------------------------------${C_RESET}"
+
+            if [[ "$IS_CRON_RUN" == "true" ]]; then
+                log "Skipping '$app_name' due to config error (Cron mode)."
+                return 1
+            fi
+
+            read -p "${C_YELLOW}Do you want to ${C_RESET}(${C_GREEN}e${C_RESET})${C_GREEN}dit ${C_YELLOW}this file or ${C_RESET}(${C_RED}s${C_RESET})${C_RED}kip${C_YELLOW}? ${C_RESET}[${C_GREEN}e${C_RESET}/${C_RED}S${C_RESET}]: " choice
+            if [[ "${choice,,}" == "e" || "${choice,,}" == "E" ]]; then
+                local editor="${EDITOR:-nano}"
+                echo -e "${C_CYAN}Opening file with $editor...${C_RESET}"
+                $editor "$compose_file"
+                echo -e "${C_CYAN}File saved. Retrying validation...${C_RESET}"
+                continue
+            else
+                echo -e "${C_LIGHT_RED}Skipping '$app_name'.${C_RESET}"
+                return 1
+            fi
+        else
+            return 0
+        fi
+    done
+}
+
 _start_app_task() {
     local app_name="$1" app_dir="$2"
     local extra_args="${3:-}"
@@ -655,15 +691,16 @@ _start_app_task() {
     log "Starting $app_name..."
     local compose_file; compose_file=$(find_compose_file "$app_dir")
     if [ -z "$compose_file" ]; then log "Warning: No compose file for '$app_name'. Skipping." ""; return; fi
-    
-    log "Pulling images for '$app_name'..."
-    if execute_and_log $SUDO_CMD docker compose -f "$compose_file" pull; then
-        log "Starting containers for '$app_name' (Args: ${extra_args:-none})..."
-        execute_and_log $SUDO_CMD docker compose -f "$compose_file" up -d $extra_args
+
+    if ! validate_and_edit_compose "$app_name" "$compose_file"; then return; fi
+
+    log "Starting containers for '$app_name' (Args: ${extra_args:-none})..."
+    if execute_and_log $SUDO_CMD docker compose -f "$compose_file" up -d $extra_args; then
         log "Successfully started '$app_name'."
+        echo -e "${C_GREEN}Successfully started '$app_name'.${C_RESET}"
     else
-        log "ERROR: Failed to pull images for '$app_name'. Aborting start."
-        echo -e "${C_LIGHT_RED}Failed to pull images for '$app_name'. Check log for details.${C_RESET}"
+        log "ERROR: Failed to start '$app_name'."
+        echo -e "${C_LIGHT_RED}Failed to start '$app_name'. Check log for details.${C_RESET}"
     fi
 }
 
@@ -672,9 +709,16 @@ _stop_app_task() {
     log "Stopping $app_name..."
     local compose_file; compose_file=$(find_compose_file "$app_dir")
     if [ -z "$compose_file" ]; then log "Info: No compose file for '$app_name'. Cannot stop." ""; return; fi
-    
-    execute_and_log $SUDO_CMD docker compose -f "$compose_file" down --remove-orphans
-    log "Successfully stopped '$app_name'."
+
+    if ! validate_and_edit_compose "$app_name" "$compose_file"; then return; fi
+
+    if execute_and_log $SUDO_CMD docker compose -f "$compose_file" down --remove-orphans; then
+        log "Successfully stopped '$app_name'."
+        echo -e "${C_GREEN}Successfully stopped '$app_name'.${C_RESET}"
+    else
+        log "ERROR: Failed to stop '$app_name'."
+        echo -e "${C_LIGHT_RED}Failed to stop '$app_name'. Check log for details.${C_RESET}"
+    fi
 }
 
 _update_app_task() {
@@ -684,7 +728,9 @@ _update_app_task() {
     log "Updating $app_name (Force Mode: $force_mode)..."
     local compose_file; compose_file=$(find_compose_file "$app_dir")
     if [ -z "$compose_file" ]; then log "Warning: No compose file for '$app_name'. Skipping." ""; return; fi
-    
+
+    if ! validate_and_edit_compose "$app_name" "$compose_file"; then return; fi
+
     local was_running=false
     if $SUDO_CMD docker compose -f "$compose_file" ps --status=running | grep -q 'running'; then
         was_running=true
@@ -934,7 +980,7 @@ app_manager_interactive_handler() {
             3)
                 action="update"; title="Select ${app_type_name} Apps to UPDATE"; task_func="_update_app_task"; menu_action_key="update"
                 echo ""
-                read -p "Force recreate containers even if no updates found? (useful for config changes) [y/N]: " force_choice
+                read -p "${C_CYAN}Force recreate containers even if no updates found? ${C_GRAY}(useful for config changes) ${C_RESET}[${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}]: " force_choice
                 if [[ "${force_choice,,}" =~ ^(y|Y|yes|YES)$ ]]; then
                     force_flag="true"
                     title="${title} (FORCE RECREATE)"
@@ -2354,6 +2400,7 @@ else
 fi
 
 LOG_FILE="$LOG_DIR/$(date +'%Y-%m-%d').log"; mkdir -p "$LOG_DIR"
+check_root
 prune_old_logs
 check_deps
 main_menu
