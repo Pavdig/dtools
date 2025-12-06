@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.4.9.5
+SCRIPT_VERSION=v1.4.9.6
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -62,7 +62,7 @@ load_config() {
     # 5. KEY=( (Start of Array)
     # 6. "Value" (Indented Array Items)
     # 7. ) (End of Array)
-    grep -E '^\s*(#|$)|^[A-Z_]+=".*"$|^[A-Z_]+='"'.*'"'$|^[A-Z_]+=[a-zA-Z0-9/+=._-]+$|^[A-Z_]+=\($|^\s*"[^"]+"$|^\)$' "$cfg_file" > "$temp_cfg"
+    grep -E '^\s*(#|$)|^[A-Z_]+=".*"$|^[A-Z_]+='"'.*'"'$|^[A-Z_]+=[a-zA-Z0-9/+=._-]+$|^[A-Z_]+=\($|^\s*"[^"]+"$|^\)$' "$cfg_file" > "$temp_cfg" || true
 
     # Double-check: If the filtered file contains dangerous shell characters, abort.
     # We check for backticks `, $(subshells), semicolons ;, pipes |, and ampersands &.
@@ -374,6 +374,14 @@ configure_shell_alias() {
             echo -e "${C_GRAY}NOTE: Run 'source ${shell_rc}' or restart your terminal to use it.${C_RESET}"
             ;;
         2)
+            # Check if alias exists before removing
+            if ! grep -Fq "$comment_line" "$shell_rc" && ! grep -q "alias .*='${SCRIPT_PATH}'" "$shell_rc"; then
+                echo -e "\n${C_YELLOW}No alias found to remove in ${C_GREEN}${shell_rc}${C_YELLOW}.${C_RESET}"
+                echo -e "${C_GRAY}(The alias might have been removed manually or wasn't set up yet.)${C_RESET}\n"
+                sleep 1
+                return
+            fi
+
             echo -e "\n${C_YELLOW}Removing alias...${C_RESET}"
             
             # Remove the specific comment line
@@ -392,13 +400,75 @@ configure_shell_alias() {
     esac
 }
 
+ensure_tool_installed() {
+    local tool_cmd="$1"
+    local package_name="$2"
+    local tool_desc="$3"
+
+    if ! command -v "$tool_cmd" &>/dev/null; then
+        echo -e "\n${C_RED}Error: '${tool_cmd}' command not found.${C_RESET}"
+        echo -e "${C_YELLOW}This tool is required for: ${tool_desc}.${C_RESET}\n"
+        read -p "${C_YELLOW}Do you want to install '${C_CYAN}${package_name}${C_YELLOW}' now? ${C_RESET}(${C_GREEN}Y${C_RESET}/${C_RED}n${C_RESET}): " install_tool
+        if [[ "${install_tool:-y}" =~ ^(y|Y|yes|YES)$ ]]; then
+             echo -e "${C_CYAN}Installing ${package_name}...${C_RESET}"
+             # Use SUDO_CMD. Run update and install separately to handle errors correctly.
+             if $SUDO_CMD apt-get update && $SUDO_CMD apt-get install -y "$package_name"; then
+                 echo -e "${C_GREEN}Installation successful.${C_RESET}"
+                 return 0
+             else
+                 echo -e "${C_RED}Installation failed. Please install '${C_CYAN}${package_name}${C_RED}' manually.${C_RESET}"
+                 return 1
+             fi
+        else
+             echo -e "${C_RED}Operation cancelled. Missing dependency.${C_RESET}"
+             return 1
+        fi
+    fi
+    return 0
+}
+
 initial_setup() {
-    if [[ $EUID -ne 0 ]]; then echo -e "${C_RED}Initial setup must be run with 'sudo ./docker_tool_suite.sh'. Exiting.${C_RESET}"; exit 1; fi
+    check_root
     clear
     echo -e "${C_RESET}====================================================="
     echo -e "${C_GREEN} Welcome to the ${C_CYAN}Docker Tool Suite ${SCRIPT_VERSION} ${C_GREEN}Setup!"
     echo -e "${C_RESET}=====================================================\n"
-    echo -e "${C_YELLOW}This one-time setup will configure all modules.\n"
+
+    echo -e "${C_YELLOW}--- Checking System Dependencies ---${C_RESET}"
+    local -a packages_to_install=()
+
+    # Check OpenSSL
+    if ! command -v openssl &>/dev/null; then 
+        echo -e " ${C_RED}[-] openssl is missing.${C_RESET}"
+        packages_to_install+=("openssl")
+    else
+        echo -e " ${C_GREEN}[+] openssl is installed.${C_RESET}"
+    fi
+
+    # Check 7z (p7zip-full)
+    if ! command -v 7z &>/dev/null; then 
+        echo -e " ${C_RED}[-] 7z (p7zip-full) is missing.${C_RESET}"
+        packages_to_install+=("p7zip-full")
+    else
+        echo -e " ${C_GREEN}[+] 7z is installed.${C_RESET}"
+    fi
+
+    # Install if needed
+    if [ ${#packages_to_install[@]} -gt 0 ]; then
+        echo -e "\n${C_RED}Missing tools detected. These are required for encryption and archives.${C_RESET}"
+        read -p "${C_YELLOW}Do you want to install them now via apt? ${C_RESET}(${C_GREEN}Y${C_RESET}/${C_RED}n${C_RESET}): " install_deps
+        if [[ "${install_deps:-y}" =~ ^(y|Y|yes|YES)$ ]]; then
+            echo -e "${C_CYAN}Updating package lists and installing...${C_RESET}"
+            $SUDO_CMD apt-get update
+            $SUDO_CMD apt-get install -y "${packages_to_install[@]}"
+            echo -e "${C_GREEN}${TICKMARK} Dependencies installed successfully.${C_RESET}"
+        else
+            echo -e "${C_RED}Warning: Script may fail without these dependencies.${C_RESET}"
+            sleep 2
+        fi
+    fi
+
+    echo -e "\n${C_YELLOW}This one-time setup will configure all modules.\n"
     echo -e "${C_RESET}Settings will be saved to: ${C_GREEN}${CONFIG_FILE}${C_RESET}\n"
 
     local apps_path_def="/home/${CURRENT_USER}/apps"
@@ -486,7 +556,7 @@ initial_setup() {
 
     clear
     echo -e "\n${C_GREEN}_--| Docker Tool Suite ${SCRIPT_VERSION} Setup |---_${C_RESET}\n"
-    echo -e "${C_YELLOW}--- Configuration Summary ---${C_RESET}"
+    echo -e "${C_YELLOW}--- Configuration Summary ---${C_RESET}\n"
     echo "  App Manager:"
     echo -e "    Base Path:       ${C_GREEN}${APPS_BASE_PATH}${C_RESET}"
     echo -e "    Managed Subdir:  ${C_GREEN}${MANAGED_SUBDIR}${C_RESET}"
@@ -504,7 +574,7 @@ initial_setup() {
     echo -e "    Volumes:         ${C_GREEN}${#selected_ignored_volumes[@]} selected${C_RESET}"
     echo -e "    Images:          ${C_GREEN}${#selected_ignored_images[@]} selected${C_RESET}\n"
     
-    read -p "Save this configuration? (Y/n): " confirm_setup
+    read -p "${C_YELLOW}Save this configuration? ${C_RESET}(${C_GREEN}Y${C_RESET}/${C_RED}n${C_RESET}): " confirm_setup
     if [[ ! "${confirm_setup,,}" =~ ^(y|Y|yes|YES)$ ]]; then echo -e "\n${C_RED}Setup canceled.${C_RESET}"; exit 0; fi
 
     echo -e "\n${C_GREEN}Saving configuration...${C_RESET}"; mkdir -p "${CONFIG_DIR}"
@@ -551,7 +621,7 @@ initial_setup() {
         echo "# Archive (7z) Settings"
         echo "# Password is encrypted using a machine-specific key."
         printf "ENCRYPTED_ARCHIVE_PASSWORD=%q\n" "${ENCRYPTED_ARCHIVE_PASSWORD}"
-        echo "# Map compression: 7z levels are 0-9. (0 is copy, mx=9 is ultra)."
+        echo "# Map compression: 7z levels are 0-9. (mx=0 is copy, mx=9 is ultra)."
         echo "ARCHIVE_COMPRESSION_LEVEL=${ARCHIVE_COMPRESSION_LEVEL}"
         echo
         echo "# Log Settings"
@@ -564,7 +634,7 @@ initial_setup() {
 
     echo -e "${C_YELLOW}Creating directories and setting permissions...${C_RESET}"
     mkdir -p "${APPS_BASE_PATH}/${MANAGED_SUBDIR}" "${BACKUP_LOCATION}" "${RESTORE_LOCATION}" "${LOG_DIR}"
-    chown -R "${CURRENT_USER}:${CURRENT_USER}" "${CONFIG_DIR}" "${APPS_BASE_PATH}" "${BACKUP_LOCATION}" "${RESTORE_LOCATION}" "${LOG_DIR}"
+    $SUDO_CMD chown -R "${CURRENT_USER}:${CURRENT_USER}" "${CONFIG_DIR}" "${APPS_BASE_PATH}" "${BACKUP_LOCATION}" "${RESTORE_LOCATION}" "${LOG_DIR}"
 
     # Restrict Config Permissions
     chmod 700 "${CONFIG_DIR}"
@@ -580,15 +650,15 @@ initial_setup() {
 }
 
 setup_cron_job() {
-    echo -e "\n${C_YELLOW}--- Optional: Schedule Automatic App Updates ---${C_RESET}"
-    read -p "Would you like to schedule the app updater to run automatically? (Y/n): " schedule_now
-    if [[ ! "$(echo "${schedule_now:-y}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|Y|yes|YES)$ ]]; then
+    echo -e "\n${C_YELLOW}--- Optional: Schedule Automatic App Updates ---${C_RESET}\n"
+    read -p "${C_YELLOW}Would you like to schedule the app updater to run automatically? ${C_RESET}(${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}): " schedule_now
+    if [[ ! "$(echo "${schedule_now:-n}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|Y|yes|YES)$ ]]; then
         echo -e "${C_YELLOW}Skipping cron job setup.${C_RESET}"; return
     fi
     
     local cron_target_user="root"
-    echo "The script needs Docker permissions to run. We recommend running the scheduled task as 'root'."
-    read -p "Run the scheduled task as 'root'? (Y/n): " confirm_root
+    echo "${C_GRAY}The script needs Docker permissions to run. It's recommended running the scheduled task as 'root'.${C_RESET}"
+    read -p "${C_YELLOW}Run the scheduled task as 'root'? ${C_RESET}(${C_GREEN}Y${C_RESET}/${C_RED}n${C_RESET}): " confirm_root
     if [[ ! "$(echo "${confirm_root:-y}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|Y|yes|YES)$ ]]; then
         echo -e "${C_YELLOW}Cron job setup canceled.${C_RESET}"; return
     fi
@@ -631,7 +701,7 @@ setup_cron_job() {
     local cron_command="$cron_schedule $SUDO_CMD SUDO_USER=${CURRENT_USER} $SCRIPT_PATH update --cron"
     local cron_comment="# Added by Docker Tool Suite to update application images"
     
-    local current_crontab; current_crontab=$(crontab -u "$cron_target_user" -l 2>/dev/null || true)
+    local current_crontab; current_crontab=$($SUDO_CMD crontab -u "$cron_target_user" -l 2>/dev/null || true)
     
     if echo "$current_crontab" | grep -Fq "$SCRIPT_PATH"; then
         echo -e "${C_YELLOW}A cron job for this script already exists. Skipping.${C_RESET}"
@@ -639,7 +709,7 @@ setup_cron_job() {
         local new_crontab
         new_crontab=$(printf "%s\n%s\n%s\n" "$current_crontab" "$cron_comment" "$cron_command")
 
-        if ! echo "$new_crontab" | crontab -u "$cron_target_user" -; then
+        if ! echo "$new_crontab" | $SUDO_CMD crontab -u "$cron_target_user" -; then
             echo -e "${C_RED}Error: Failed to install the cron job. The schedule '$cron_schedule' might be invalid.${C_RESET}"
             echo -e "${C_YELLOW}Crontab was not modified.${C_RESET}"
             return 1
@@ -1437,7 +1507,7 @@ volume_smart_backup_main() {
 
     local create_archive=""
     while true; do
-        read -p $'\n'"${C_CYAN}Do you want to create a password-protected 7z archive of this backup? (${C_GREEN}Y${C_CYAN}/${C_RED}N${C_CYAN}): ${C_RESET}" create_archive
+        read -p $'\n'"${C_CYAN}Do you want to create a password-protected 7z archive of this backup? (${C_GREEN}y${C_CYAN}/${C_RED}N${C_CYAN}): ${C_RESET}" create_archive
         case "${create_archive,,}" in
             y|Y|yes|YES) break ;;
             n|N|no|NO)  echo -e "${C_YELLOW}Skipping 7z archive creation.${C_RESET}"; return ;;
@@ -1445,8 +1515,18 @@ volume_smart_backup_main() {
         esac
     done
 
-    if ! command -v 7z &>/dev/null; then echo -e "\n${C_LIGHT_RED}Error: '7z' command not found. Cannot create archive.${C_RESET}"; return 1; fi
+    # Check/Install Dependencies
+    if ! ensure_tool_installed "7z" "p7zip-full" "creating compressed archives"; then 
+        echo -e "\n${C_YELLOW}Skipping archive creation as requested.${C_RESET}"
+        echo -e "${C_GREEN}Raw backups are available in: ${C_CYAN}${backup_dir}${C_RESET}"
+        return 0
+    fi
     
+    # Check OpenSSL (only if needed)
+    if [[ -n "${ENCRYPTED_ARCHIVE_PASSWORD-}" ]] || [[ -n "${archive_password-}" ]]; then
+         if ! ensure_tool_installed "openssl" "openssl" "handling encrypted passwords"; then return 1; fi
+    fi
+
     local archive_password=""
     local password_is_set=false
 
@@ -1466,7 +1546,7 @@ volume_smart_backup_main() {
                     break
                     ;;
                 e|E|enter|ENTER)
-                    echo -e "${C_YELLOW}-> Enter a session-specific password.${C_RESET}"
+                    echo -e "\n${C_YELLOW}Session-specific password.${C_RESET}"
                     break
                     ;;
                 n|N|no|NO)
@@ -1505,22 +1585,26 @@ volume_smart_backup_main() {
     local archive_name=""
     
     echo -e "\n${C_YELLOW}--- Archive Naming ---${C_RESET}"
-    echo "  1) Default      : Apps-backup[${current_date}].7z"
-    echo "  2) Semi-Default : Apps-backup(TAG)[${current_date}].7z"
-    echo "  3) Custom Name  : (User defined)"
-    echo "  4) Precision    : Apps-backup[${current_date}_HH-MM-SS].7z"
-    
+    echo -e "  1) Default      : ${C_CYAN}Apps-backup[${current_date}].7z ${C_RESET}"
+    echo -e "  2) Semi-Default : ${C_CYAN}Apps-backup(${C_RESET}(User defined)${C_CYAN})[${current_date}].7z ${C_RESET}"
+    echo -e "  3) Custom Name  : (User defined)"
+    echo -e "  4) Precision    : ${C_CYAN}Apps-backup[${current_date}_HH-MM-SS].7z\n ${C_RESET}"
     read -p "${C_YELLOW}Select naming convention [${C_RESET}1${C_YELLOW}-${C_RESET}4${C_YELLOW}]: ${C_RESET}" name_choice
 
     case "$name_choice" in
         2)
             read -p "Enter tag name (e.g., 'Plex' or 'Databases'): " tag_name
-            tag_name="${tag_name//\//-}" 
+            # Sanitize: Allow only alphanumeric, dash, underscore, dot
+            if [[ ! "$tag_name" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+                echo -e "${C_RED}Invalid characters detected. Replaced with safe defaults.${C_RESET}"
+                tag_name=$(echo "$tag_name" | tr -cd '[:alnum:]._-')
+            fi
             archive_name="Apps-backup(${tag_name})[${current_date}].7z"
             ;;
         3)
             read -p "Enter full filename: " custom_name
-            custom_name="${custom_name//\//-}"
+            # Sanitize: Allow only alphanumeric, dash, underscore, dot, parenthesis
+            custom_name=$(echo "$custom_name" | tr -cd '[:alnum:]._-()')
             if [[ "${custom_name}" != *.7z ]]; then custom_name="${custom_name}.7z"; fi
             archive_name="$custom_name"
             ;;
@@ -1895,7 +1979,12 @@ update_secure_archive_settings() {
     check_root
     clear
     echo -e "${C_YELLOW}--- Update Secure Archive Password ---${C_RESET}\n"
-    
+
+    if ! ensure_tool_installed "openssl" "openssl" "encrypting passwords"; then
+        read -p "Press Enter to return..."
+        return
+    fi
+
     local archive_pass_1 archive_pass_2 ENCRYPTED_ARCHIVE_PASSWORD=""
     while true; do
         read -sp "Enter a new password (leave blank to remove, or type 'cancel' to exit): " archive_pass_1; echo
@@ -2013,9 +2102,9 @@ update_unused_images_main() {
 
 setup_unused_images_cron_job() {
     check_root
-    echo -e "\n${C_YELLOW}--- Schedule Automatic Unused Image Updates ---${C_RESET}"
-    read -p "Would you like to schedule the unused image updater to run automatically? (Y/n): " schedule_now
-    if [[ ! "$(echo "${schedule_now:-y}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|Y|yes|YES)$ ]]; then
+    echo -e "\n${C_YELLOW}--- Schedule Automatic Unused Image Updates ---${C_RESET}\n"
+    read -p "${C_YELLOW}Would you like to schedule the unused image updater to run automatically? ${C_RESET}(${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}): " schedule_now
+    if [[ ! "$(echo "${schedule_now:-n}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|Y|yes|YES)$ ]]; then
         echo -e "${C_YELLOW}Skipping cron job setup.${C_RESET}"; return
     fi
     
@@ -2056,7 +2145,7 @@ setup_unused_images_cron_job() {
     local cron_command="$cron_schedule $SUDO_CMD SUDO_USER=${CURRENT_USER} $SCRIPT_PATH update-unused --cron"
     local cron_comment="# Added by Docker Tool Suite to update unused Docker images"
     
-    local current_crontab; current_crontab=$(crontab -u "$cron_target_user" -l 2>/dev/null || true)
+    local current_crontab; current_crontab=$($SUDO_CMD crontab -u "$cron_target_user" -l 2>/dev/null || true)
     
     if echo "$current_crontab" | grep -Fq "update-unused"; then
         echo -e "${C_YELLOW}A cron job for this task already exists. Skipping.${C_RESET}"
@@ -2064,7 +2153,7 @@ setup_unused_images_cron_job() {
         local new_crontab
         new_crontab=$(printf "%s\n%s\n%s\n" "$current_crontab" "$cron_comment" "$cron_command")
 
-        if ! echo "$new_crontab" | crontab -u "$cron_target_user" -; then
+        if ! echo "$new_crontab" | $SUDO_CMD crontab -u "$cron_target_user" -; then
             echo -e "${C_RED}Error: Failed to install the cron job. The schedule '$cron_schedule' might be invalid.${C_RESET}"
             echo -e "${C_YELLOW}Crontab was not modified.${C_RESET}"
             return 1
@@ -2299,6 +2388,7 @@ if [[ $# -gt 0 ]]; then
     if [[ ! -f "$CONFIG_FILE" ]]; then echo -e "${C_RED}Config not found. Please run with 'sudo' for initial setup.${C_RESET}"; exit 1; fi
     # Security: Ensure config is locked down before reading
     chmod 600 "$CONFIG_FILE" 2>/dev/null || true
+
     case "$1" in
         --help|-h)
             echo -e "${C_RESET}=============================================="
@@ -2331,7 +2421,6 @@ if [[ $# -gt 0 ]]; then
         update)
             shift
             log_prefix="dtools-au"
-
             while (( "$#" )); do
               case "$1" in
                 --dry-run) DRY_RUN=true; shift ;;
@@ -2353,10 +2442,10 @@ if [[ $# -gt 0 ]]; then
             
             app_manager_update_all_known_apps
             exit 0 ;;
+
         update-unused)
             shift 
             log_prefix="dtools-uil"
-            
             while (( "$#" )); do
               case "$1" in
                 --dry-run) DRY_RUN=true; shift ;;
@@ -2378,12 +2467,15 @@ if [[ $# -gt 0 ]]; then
             
             update_unused_images_main
             exit 0 ;;
+
         *) 
             echo -e "${C_RED}Unknown command: $1${C_RESET}"
             echo -e "Try ${C_YELLOW}$0 --help${C_RESET} for more information."
             exit 1 ;;
     esac
 fi
+
+# --- Config Validation & Startup ---
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
     initial_setup
@@ -2394,8 +2486,23 @@ if [[ -f "$CONFIG_FILE" ]]; then
     chmod 700 "$CONFIG_DIR" 2>/dev/null || true
 
     load_config "$CONFIG_FILE"
+
+    # Sanity Check: If APPS_BASE_PATH is missing, the config is likely broken
+    if [[ -z "${APPS_BASE_PATH-}" ]]; then
+        echo -e "${C_RED}Error: Configuration file is empty or corrupt.${C_RESET}"
+
+        # Backup the broken file
+        backup_conf="${CONFIG_FILE}.$(date +%Y-%m-%d_%H-%M-%S).broken"
+        mv "$CONFIG_FILE" "$backup_conf"
+        echo -e "${C_YELLOW}Backed up broken config to: ${C_GRAY}${backup_conf}${C_RESET}"
+        
+        echo -e "${C_GREEN}Restarting initial setup...${C_RESET}\n"
+        sleep 2
+        initial_setup
+        load_config "$CONFIG_FILE"
+    fi
 else
-    echo -e "${C_RED}Error: Configuration file not found.${C_RESET}"
+    echo -e "${C_RED}Error: Configuration file not found even after setup attempt.${C_RESET}"
     exit 1
 fi
 

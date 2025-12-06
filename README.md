@@ -24,14 +24,15 @@ A powerful, self-hosted Bash script designed to simplify the management of Docke
 - **Log Management:** Centralized log viewer with auto-pruning (retention policies).
 - **System Prune:** Guided clean-up of stopped containers, unused networks, and build caches.
 - **Security:** Encrypts sensitive configuration passwords (like RAR passwords) using a machine-specific key (OpenSSL).
+- **Smart Setup:** Auto-detects missing dependencies and corrupted configurations, offering self-repair and auto-installation of tools like `openssl` and `7z`.
 
 ## 📋 Prerequisites
 
-The script runs on Debian-based systems and requires:
+The script runs on Debian-based systems. It automatically checks for required tools and offers to install them if missing:
 - **Docker** & **Docker Compose V2**
-- `openssl` (for password encryption)
-- `p7zip-full` (optional, for creating secure archives)
-- Root/Sudo privileges
+- `openssl` (Required for password encryption)
+- `p7zip-full` (Optional, for creating secure archives)
+- Root/Sudo privileges (Script will prompt for password if not run as root)
 
 ## 🛠️ Installation
 
@@ -48,9 +49,8 @@ The script runs on Debian-based systems and requires:
 
 3. Run the script:
    ```bash
-   sudo ./docker_tool_suite.sh
-   ```
-
+   ./docker_tool_suite.sh
+   # The script will prompt for sudo password if required.
 *On the first run, the script will guide you through a setup wizard to define your app directories, backup locations, retention policies, and optional shell shortcuts.*
 
 ## 📖 Usage
