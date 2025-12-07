@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.4.9.8
+SCRIPT_VERSION=v1.4.9.9
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -133,30 +133,32 @@ print_standard_menu() {
 }
 
 # --- Encryption ---
+KEY_FILE="${CONFIG_DIR}/.master.key"
+
 get_secret_key() {
-    if [[ -r /etc/machine-id ]]; then
-        cat /etc/machine-id
-    elif [[ -r /var/lib/dbus/machine-id ]]; then
-        cat /var/lib/dbus/machine-id
-    else
-        log "Warning: machine-id not found. Using hostname as a fallback for encryption key."
-        hostname
+    if [[ ! -d "$CONFIG_DIR" ]]; then 
+        mkdir -p "$CONFIG_DIR"
+        chmod 700 "$CONFIG_DIR"
+        if [[ -n "${SUDO_USER-}" ]]; then chown "${SUDO_USER}:${SUDO_USER}" "$CONFIG_DIR"; fi
     fi
+
+    if [[ ! -f "$KEY_FILE" ]]; then
+        openssl rand -base64 64 > "$KEY_FILE"
+        chmod 600 "$KEY_FILE"
+        if [[ -n "${SUDO_USER-}" ]]; then chown "${SUDO_USER}:${SUDO_USER}" "$KEY_FILE"; fi
+    fi
+
+    cat "$KEY_FILE"
 }
 
 encrypt_pass() {
     local plaintext="$1"
-    # We pass the key via file descriptor 3 using process substitution
-    # to avoid the key appearing in process lists (as arguments).
-    # Standard input (fd 0) is used for the plaintext.
-    printf '%s' "$plaintext" | openssl enc -aes-256-cbc -a -salt -pbkdf2 -pass fd:3 3< <(get_secret_key) | tr -d '\n'
+    printf '%s' "$plaintext" | openssl enc -aes-256-cbc -a -salt -pbkdf2 -iter 133337 -pass fd:3 3< <(get_secret_key) | tr -d '\n'
 }
 
 decrypt_pass() {
     local encrypted_text="$1"
-    # We pass the key via file descriptor 3 using process substitution.
-    # Standard input (fd 0) is used for the encrypted text.
-    printf '%s\n' "$encrypted_text" | openssl enc -aes-256-cbc -a -d -salt -pbkdf2 -pass fd:3 3< <(get_secret_key) 2>/dev/null || true
+    printf '%s\n' "$encrypted_text" | openssl enc -aes-256-cbc -a -d -salt -pbkdf2 -iter 133337 -pass fd:3 3< <(get_secret_key) 2>/dev/null || true
 }
 
 _record_image_state() {
@@ -727,8 +729,8 @@ initial_setup() {
         fi
         echo ")"
         echo
-        echo "# Archive (7z) Settings"
-        echo "# Password is encrypted using a machine-specific key."
+        echo "# Archive Settings"
+        echo "# Password is encrypted using a unique key stored in .master.key."
         printf "ENCRYPTED_ARCHIVE_PASSWORD=%q\n" "${ENCRYPTED_ARCHIVE_PASSWORD}"
         echo "# Map compression: 7z levels are 0-9. (mx=0 is copy, mx=9 is ultra)."
         echo "ARCHIVE_COMPRESSION_LEVEL=\"${ARCHIVE_COMPRESSION_LEVEL}\""
@@ -2113,7 +2115,7 @@ update_secure_archive_settings() {
 
     sed -i '/^ENCRYPTED_ARCHIVE_PASSWORD=/d' "$CONFIG_FILE"
 
-    local anchor="# Password is encrypted using a machine-specific key."
+    local anchor="# Password is encrypted using a unique key stored in .master.key."
     sed -i "\|$anchor|a ${new_config_line}" "$CONFIG_FILE"
 
     chmod 600 "$CONFIG_FILE"

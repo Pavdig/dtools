@@ -5,7 +5,7 @@ A Bash script with a Text User Interface (TUI) to simplify managing Docker Compo
 ## 🚀 Features
 
 - **App Management:** Start, stop, restart, and force recreate containers. Includes an update checker to only recreate changed images.
-- **Backups:** Auto-detects and backs up volumes for specific apps or standalone volumes. Supports `zstd` compression and encrypted `7-Zip` archives.
+- **Backups:** Auto-detects and backs up volumes for specific apps or standalone volumes. Supports `zstd` compression and **AES-256 encrypted** `7-Zip` archives using a secure local key.
 - **Automation:** Built-in scheduler (Cron) for automatic app updates and cleaning up unused images.
 - **Maintenance:** View logs, prune system (unused containers/networks), and manage local image history for rollbacks.
 - **Safety:** Includes "Dry Run" modes and validates configuration inputs (paths, integers) to prevent errors.
