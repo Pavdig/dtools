@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.4.9.7
+SCRIPT_VERSION=v1.4.9.8
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -466,6 +466,66 @@ ensure_tool_installed() {
     return 0
 }
 
+_prompt_input() {
+    local prompt_text="$1"
+    local default_val="$2"
+    local -n output_var="$3"
+    local val_type="${4:-text}"
+    local min="${5:-}"
+    local max="${6:-}"
+
+    while true; do
+        local input_val
+        read -e -p "${prompt_text} [${C_GREEN}${default_val}${C_RESET}]: " input_val
+        if [[ -z "$input_val" ]]; then
+            output_var="$default_val"
+        else
+            output_var="$input_val"
+        fi
+        local valid=true
+        case "$val_type" in
+            int)
+                if [[ ! "$output_var" =~ ^[0-9]+$ ]]; then
+                    echo -e "${C_RED}Error: Input must be a positive integer.${C_RESET}"
+                    valid=false
+                else
+                    local check_val=$((10#$output_var))
+                    if [[ -n "$min" && "$check_val" -lt "$min" ]]; then
+                        echo -e "${C_RED}Error: Minimum value is $min.${C_RESET}"
+                        valid=false
+                    fi
+                    if [[ -n "$max" && "$check_val" -gt "$max" ]]; then
+                        echo -e "${C_RED}Error: Maximum value is $max.${C_RESET}"
+                        valid=false
+                    fi
+                fi
+                ;;
+            path)
+                if [[ ! "$output_var" =~ ^(/|~|\.) ]]; then
+                    echo -e "${C_RED}Error: Path must start with / (absolute), ~ (home), or . (relative).${C_RESET}"
+                    valid=false
+                fi
+                if [[ "$output_var" =~ [\&\|\;\`\$] ]]; then
+                     echo -e "${C_RED}Error: Path contains invalid shell characters.${C_RESET}"
+                     valid=false
+                fi
+                ;;
+            subdir)
+                if [[ "$output_var" =~ ^(/|~) ]]; then
+                    echo -e "${C_RED}Error: Subdirectory must be a relative path (cannot start with / or ~).${C_RESET}"
+                    valid=false
+                fi
+                if [[ "$output_var" =~ [\&\|\;\`\$] ]]; then
+                     echo -e "${C_RED}Error: Name contains invalid shell characters.${C_RESET}"
+                     valid=false
+                fi
+                ;;
+        esac
+
+        if $valid; then break; fi
+    done
+}
+
 initial_setup() {
     check_root
     clear
@@ -476,7 +536,6 @@ initial_setup() {
     echo -e "${C_YELLOW}--- Checking System Dependencies ---${C_RESET}"
     local -a packages_to_install=()
 
-    # Check OpenSSL
     if ! command -v openssl &>/dev/null; then 
         echo -e " ${C_RED}[-] openssl is missing.${C_RESET}"
         packages_to_install+=("openssl")
@@ -484,7 +543,6 @@ initial_setup() {
         echo -e " ${C_GREEN}[+] openssl is installed.${C_RESET}"
     fi
 
-    # Check 7z (p7zip-full)
     if ! command -v 7z &>/dev/null; then 
         echo -e " ${C_RED}[-] 7z (p7zip-full) is missing.${C_RESET}"
         packages_to_install+=("p7zip-full")
@@ -492,7 +550,6 @@ initial_setup() {
         echo -e " ${C_GREEN}[+] 7z is installed.${C_RESET}"
     fi
 
-    # Install if needed
     if [ ${#packages_to_install[@]} -gt 0 ]; then
         echo -e "\n${C_RED}Missing tools detected. These are required for encryption and archives.${C_RESET}"
         read -p "${C_YELLOW}Do you want to install them now via apt? ${C_RESET}(${C_GREEN}Y${C_RESET}/${C_RED}n${C_RESET}): " install_deps
@@ -519,13 +576,27 @@ initial_setup() {
     
     echo -e "-----------------------------------------------------\n"
     echo -e "${C_YELLOW}--- Configure Path Settings ---${C_RESET}\n"
-    echo -e "${C_GRAY}Leave the default paths or enter your own. \n${C_RESET}"
-    read -p "Base Compose Apps Path [${C_GREEN}${apps_path_def}${C_RESET}]: " apps_path; APPS_BASE_PATH=${apps_path:-$apps_path_def}
-    read -p "Managed Apps Subdirectory [${C_GREEN}${managed_subdir_def}${C_RESET}]: " managed_subdir; MANAGED_SUBDIR=${managed_subdir:-$managed_subdir_def}
-    read -p "Volume Backup Location [${C_GREEN}${backup_path_def}${C_RESET}]: " backup_loc; BACKUP_LOCATION=${backup_loc:-$backup_path_def}
-    read -p "Volume Restore Location [${C_GREEN}${restore_path_def}${C_RESET}]: " restore_loc; RESTORE_LOCATION=${restore_loc:-$restore_path_def}
-    read -p "Log Directory Path [${C_GREEN}${log_dir_def}${C_RESET}]: " log_dir; LOG_DIR=${log_dir:-$log_dir_def}
-    read -p "Log file retention period (days, 0 to disable) [${C_GREEN}${log_retention_def}${C_RESET}]: " log_retention; LOG_RETENTION_DAYS=${log_retention:-$log_retention_def}
+    echo -e "${C_GRAY}Leave the default paths or enter your own. Autocompletion (Tab) is enabled.\n${C_RESET}"
+
+    _prompt_input "Base Compose Apps Path"      "$apps_path_def"      APPS_BASE_PATH    "path"
+    _prompt_input "Managed Apps Subdirectory"   "$managed_subdir_def" MANAGED_SUBDIR    "subdir"
+    _prompt_input "Volume Backup Location"      "$backup_path_def"    BACKUP_LOCATION   "path"
+    _prompt_input "Volume Restore Location"     "$restore_path_def"   RESTORE_LOCATION  "path"
+    _prompt_input "Log Directory Path"          "$log_dir_def"        LOG_DIR           "path"
+    _prompt_input "Log file retention period (days, 0 to disable)" "$log_retention_def" LOG_RETENTION_DAYS "int" 0 3650
+    
+    local log_sub_update_def="apps-update-logs"
+    local log_sub_unused_def="unused-images-update-logs"
+    
+    _prompt_input "Subdirectory for App Update Logs"    "$log_sub_update_def" LOG_SUBDIR_UPDATE "subdir"
+    _prompt_input "Subdirectory for Unused Image Logs"  "$log_sub_unused_def" LOG_SUBDIR_UNUSED "subdir"
+
+    echo -e "\n${C_YELLOW}--- Configure Helper Images ---${C_RESET}"
+    local backup_image_def="docker/alpine-tar-zstd:latest"
+    local explore_image_def="debian:trixie-slim"
+    
+    _prompt_input "Backup Helper Image"   "$backup_image_def"  BACKUP_IMAGE  "text"
+    _prompt_input "Volume Explorer Image" "$explore_image_def" EXPLORE_IMAGE "text"
     
     local log_sub_update_def="apps-update-logs"
     local log_sub_unused_def="unused-images-update-logs"
@@ -590,8 +661,7 @@ initial_setup() {
         fi
     done
 
-    read -p "${C_YELLOW}Default 7z Compression Level ${C_CYAN}(Copy:0 - Ultra:9) ${C_GREEN}[${C_CYAN}3-Fast${C_YELLOW}]${C_RESET}: " archive_level
-    ARCHIVE_COMPRESSION_LEVEL=${archive_level:-3}
+    _prompt_input "${C_YELLOW}Default 7z Compression Level ${C_CYAN}(Copy:0 - Ultra:9)${C_RESET}" "3" ARCHIVE_COMPRESSION_LEVEL "int" 0 9
 
     clear
     echo -e "\n${C_GREEN}_--| Docker Tool Suite ${SCRIPT_VERSION} Setup |---_${C_RESET}\n"
@@ -614,7 +684,7 @@ initial_setup() {
     echo -e "    Images:          ${C_GREEN}${#selected_ignored_images[@]} selected${C_RESET}\n"
     
     read -p "${C_YELLOW}Save this configuration? ${C_RESET}(${C_GREEN}Y${C_RESET}/${C_RED}n${C_RESET}): " confirm_setup
-    if [[ ! "${confirm_setup,,}" =~ ^(y|Y|yes|YES)$ ]]; then echo -e "\n${C_RED}Setup canceled.${C_RESET}"; exit 0; fi
+    if [[ ! "${confirm_setup,,}" =~ ^(y|Y|yes|YES)$ ]]; then echo -e "\n ${C_RED}Setup canceled!\n${C_GRAY}(confirm to save the config)${C_RESET}"; exit 0; fi
 
     echo -e "\n${C_GREEN}Saving configuration...${C_RESET}"; mkdir -p "${CONFIG_DIR}"
     {
@@ -661,14 +731,14 @@ initial_setup() {
         echo "# Password is encrypted using a machine-specific key."
         printf "ENCRYPTED_ARCHIVE_PASSWORD=%q\n" "${ENCRYPTED_ARCHIVE_PASSWORD}"
         echo "# Map compression: 7z levels are 0-9. (mx=0 is copy, mx=9 is ultra)."
-        echo "ARCHIVE_COMPRESSION_LEVEL=${ARCHIVE_COMPRESSION_LEVEL}"
+        echo "ARCHIVE_COMPRESSION_LEVEL=\"${ARCHIVE_COMPRESSION_LEVEL}\""
         echo
         echo "# Log Settings"
         printf "LOG_DIR=\"%s\"\n" "${LOG_DIR}"
         printf "LOG_SUBDIR_UPDATE=\"%s\"\n" "${LOG_SUBDIR_UPDATE}"
         printf "LOG_SUBDIR_UNUSED=\"%s\"\n" "${LOG_SUBDIR_UNUSED}"
         echo "# Log file retention period in days. Set to 0 to disable automatic pruning."
-        printf "LOG_RETENTION_DAYS=%s\n" "${LOG_RETENTION_DAYS}"
+        printf "LOG_RETENTION_DAYS=%s\n" "\"${LOG_RETENTION_DAYS}\""
     } > "${CONFIG_FILE}"
 
     echo -e "${C_YELLOW}Creating directories and setting permissions...${C_RESET}"
@@ -679,84 +749,21 @@ initial_setup() {
     chmod 700 "${CONFIG_DIR}"
     chmod 600 "${CONFIG_FILE}"
 
-    setup_cron_job
-    setup_unused_images_cron_job
+    # Prompt for Task Scheduler
+    echo -e "\n${C_GREEN}--- Task Scheduler ---${C_RESET}\n"
+    read -p "${C_YELLOW}Do you want to configure scheduled tasks ${C_GRAY}(Auto-Updates) ${C_YELLOW}now? ${C_RESET}(${C_CYAN}y${C_RESET}/${C_RED}N${C_RESET}): " config_sched
+    if [[ "${config_sched,,}" =~ ^(y|Y|yes|YES)$ ]]; then
+        scheduler_menu
+    fi
 
-    echo -e "\n${C_YELLOW}--- Optional: Shell Shortcut ---${C_RESET}"
-    configure_shell_alias
+    # Prompt for Shell Alias
+    echo -e "\n${C_GREEN}--- Optional: Shell Shortcut ---${C_RESET}\n"
+    read -p "${C_YELLOW}Do you want to create a shell shortcut ${C_GRAY}(alias) ${C_YELLOW}now? ${C_RESET}(${C_CYAN}y${C_RESET}/${C_RED}N${C_RESET}): " config_alias
+    if [[ "${config_alias,,}" =~ ^(y|Y|yes|YES)$ ]]; then
+        configure_shell_alias
+    fi
 
     echo -e "\n${C_GREEN}${TICKMARK} Setup complete! The script will now continue.${C_RESET}\n"; sleep 2
-}
-
-setup_cron_job() {
-    echo -e "\n${C_YELLOW}--- Optional: Schedule Automatic App Updates ---${C_RESET}\n"
-    read -p "${C_YELLOW}Would you like to schedule the app updater to run automatically? ${C_RESET}(${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}): " schedule_now
-    if [[ ! "$(echo "${schedule_now:-n}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|Y|yes|YES)$ ]]; then
-        echo -e "${C_YELLOW}Skipping cron job setup.${C_RESET}"; return
-    fi
-    
-    local cron_target_user="root"
-    echo "${C_GRAY}The script needs Docker permissions to run. It's recommended running the scheduled task as 'root'.${C_RESET}"
-    read -p "${C_YELLOW}Run the scheduled task as 'root'? ${C_RESET}(${C_GREEN}Y${C_RESET}/${C_RED}n${C_RESET}): " confirm_root
-    if [[ ! "$(echo "${confirm_root:-y}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|Y|yes|YES)$ ]]; then
-        echo -e "${C_YELLOW}Cron job setup canceled.${C_RESET}"; return
-    fi
-
-    local cron_schedule=""
-    while true; do
-        clear
-        echo -e "${C_YELLOW}Choose a schedule for the app updater (for user: ${C_GREEN}$cron_target_user${C_YELLOW}):${C_RESET}\n"
-        echo -e "   ${C_GREEN}--- Special & Frequent ---           --- Daily & Weekly ---${C_RESET}"
-        echo "   1) At every reboot                   6) Daily (at 4 AM)"
-        echo "   2) Every hour                        7) Weekly (Sunday at midnight)"
-        echo "   3) Every 6 hours                     8) Weekly (Saturday at 4 AM)"
-        echo "   4) Every 12 hours"
-        echo "   5) Daily (at midnight)"
-        echo
-        echo "   ${C_GREEN}--- Monthly & Custom ---${C_RESET}"
-        echo "   9) Monthly (1st of month at 4 AM)"
-        echo -e "  ${C_CYAN}10) Custom${C_RESET}"
-        echo -e "  ${C_RED}11) Cancel${C_RESET}"
-        echo
-        read -p "${C_YELLOW}Enter your choice [1-11]: ${C_RESET}" choice
-        case $choice in
-            1) cron_schedule="@reboot"; break ;;
-            2) cron_schedule="0 * * * *"; break ;;
-            3) cron_schedule="0 */6 * * *"; break ;;
-            4) cron_schedule="0 */12 * * *"; break ;;
-            5) cron_schedule="0 0 * * *"; break ;;
-            6) cron_schedule="0 4 * * *"; break ;;
-            7) cron_schedule="0 0 * * 0"; break ;;
-            8) cron_schedule="0 4 * * 6"; break ;;
-            9) cron_schedule="0 4 1 * *"; break ;;
-            10) read -p "Enter custom cron schedule (e.g., '30 2 * * *' for 2:30 AM daily): " custom_cron
-                if [[ -n "$custom_cron" ]]; then cron_schedule="$custom_cron"; break; fi ;;
-            11) echo -e "${C_YELLOW}Cron job setup canceled.${C_RESET}"; return ;;
-            *) echo -e "${C_RED}Invalid option. Please try again.${C_RESET}"; sleep 1 ;;
-        esac
-    done
-
-    echo -e "\n${C_YELLOW}Adding job to root's crontab...${C_RESET}\n"
-    local cron_command="$cron_schedule $SUDO_CMD SUDO_USER=${CURRENT_USER} $SCRIPT_PATH update --cron"
-    local cron_comment="# Added by Docker Tool Suite to update application images"
-    
-    local current_crontab; current_crontab=$($SUDO_CMD crontab -u "$cron_target_user" -l 2>/dev/null || true)
-    
-    if echo "$current_crontab" | grep -Fq "$SCRIPT_PATH"; then
-        echo -e "${C_CYAN}A cron job for this task already exists."
-        echo -e "${C_GRAY}Please edit it manually (sudo crontab -e).${C_RESET}"
-        sleep 1
-    else
-        local new_crontab
-        new_crontab=$(printf "%s\n%s\n%s\n" "$current_crontab" "$cron_comment" "$cron_command")
-
-        if ! echo "$new_crontab" | $SUDO_CMD crontab -u "$cron_target_user" -; then
-            echo -e "${C_RED}Error: Failed to install the cron job. The schedule '$cron_schedule' might be invalid.${C_RESET}"
-            echo -e "${C_YELLOW}Crontab was not modified.${C_RESET}"
-            return 1
-        fi
-        echo -e "${C_GREEN}${TICKMARK} Cron job added successfully!${C_RESET}"
-    fi
 }
 
 validate_and_edit_compose() {
@@ -2195,73 +2202,188 @@ update_unused_images_main() {
     log "--- Update Summary ---"; log "Total images scanned: $total_images_scanned"; log "Images updated/to be updated: $updated_count"; log "Images skipped (in use): $used_count"; log "Images skipped (on ignore list): $ignored_count"; log "Images skipped (un-pullable): $unpullable_count"; log "Script finished."
 }
 
-setup_unused_images_cron_job() {
-    check_root
-    echo -e "\n${C_YELLOW}--- Schedule Automatic Unused Image Updates ---${C_RESET}\n"
-    read -p "${C_YELLOW}Would you like to schedule the unused image updater to run automatically? ${C_RESET}(${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}): " schedule_now
-    if [[ ! "$(echo "${schedule_now:-n}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|Y|yes|YES)$ ]]; then
-        echo -e "${C_YELLOW}Skipping cron job setup.${C_RESET}"; return
-    fi
+# --- Advanced Cron Scheduler ---
+_get_current_cron_schedule() {
+    local cmd_identifier="$1"
+    $SUDO_CMD crontab -l 2>/dev/null | grep "$cmd_identifier" | sed "s| $SUDO_CMD.*||" || true
+}
 
-    local cron_target_user="root"
-    echo "The script needs Docker permissions to run. We recommend running the scheduled task as 'root'."
-    read -p "Run the scheduled task as 'root'? (Y/n): " confirm_root
-    if [[ ! "$(echo "${confirm_root:-y}" | tr '[:upper:]' '[:lower:]')" =~ ^(y|Y|yes|YES)$ ]]; then
-        echo -e "${C_YELLOW}Cron job setup canceled.${C_RESET}"; return
-    fi
+_remove_cron_task() {
+    local cmd_identifier="$1"
+    local task_name="$2"
 
-    local cron_schedule=""
+    echo -e "${C_YELLOW}Removing existing $task_name task...${C_RESET}"
+    local current_crontab
+    current_crontab=$($SUDO_CMD crontab -l 2>/dev/null || true)
+    if [[ -z "$current_crontab" ]]; then return; fi
+
+    local comment_pattern="# $task_name (Managed by dtools)"
+    local new_crontab
+    new_crontab=$(echo "$current_crontab" | grep -v -F "$cmd_identifier" | grep -v -F "$comment_pattern" || true)
+
+    if [[ -z "$new_crontab" ]]; then
+        $SUDO_CMD crontab -r 2>/dev/null || true
+    else
+        echo "$new_crontab" | $SUDO_CMD crontab -
+    fi
+    log "Removed cron task: $task_name"
+}
+
+_add_cron_task() {
+    local cmd_identifier="$1"
+    local task_name="$2"
+    local cron_schedule="$3"
+    local full_command="$4"
+    local comment="# $task_name (Managed by dtools)"
+
+    _remove_cron_task "$cmd_identifier" "$task_name" >/dev/null
+
+    local current_crontab
+    current_crontab=$($SUDO_CMD crontab -l 2>/dev/null || true)
+    
+    echo -e "${C_YELLOW}Adding new schedule for $task_name...${C_RESET}"
+    printf "%s\n%s\n%s\n" "$current_crontab" "$comment" "$cron_schedule $full_command" | $SUDO_CMD crontab -
+    echo -e "${C_GREEN}${TICKMARK} Task scheduled successfully: ${C_CYAN}[$cron_schedule]${C_RESET}"
+    log "Scheduled $task_name at '$cron_schedule'"
+}
+
+_cron_schedule_picker() {
+    local task_name="$1"
+    local choice_ref="$2"
+
     while true; do
         clear
-        echo -e "${C_YELLOW}Choose a schedule for the unused image cleaner (for user: ${C_GREEN}$cron_target_user${C_YELLOW}):${C_RESET}\n"
-        echo -e "   ${C_GREEN}--- Daily & Weekly ---                  --- Monthly & Custom ---${C_RESET}"
-        echo "   1) Daily (at 3 AM)                      5) Bi-weekly (1st and 15th at 3 AM)"
-        echo "   2) Every 3 days (at 3 AM)               6) Monthly (1st of month at 3 AM)"
-        echo "   3) Weekly (Sunday at 3 AM)"
-        echo "   4) Weekly (Saturday at 3 AM)            7) Custom"
-        echo -e "                                           ${C_RED}8) Cancel${C_RESET}"
+        echo -e "${C_YELLOW}--- Configure Schedule for: ${C_GREEN}${task_name}${C_YELLOW} ---${C_RESET}\n"
+        echo -e "   ${C_GREEN}--- Frequent ---                     --- Daily & Weekly ---${C_RESET}"
+        echo "   1) @reboot (On Startup)              6) Daily (at 3 AM)"
+        echo "   2) Every hour                        7) Daily (at 4 AM)"
+        echo "   3) Every 6 hours                     8) Weekly (Sunday at 3 AM)"
+        echo "   4) Every 12 hours                    9) Weekly (Saturday at 3 AM)"
+        echo "   5) Daily (Midnight)                  "
         echo
-        read -p "Enter your choice [1-8]: " choice
+        echo -e "   ${C_GREEN}--- Monthly & Custom ---${C_RESET}"
+        echo "   10) Monthly (1st at 4 AM)"
+        echo -e "   11) ${C_CYAN}Custom Cron Expression${C_RESET}"
+        echo -e "   12) ${C_RED}Cancel${C_RESET}"
+        echo
+        read -p "${C_YELLOW}Select schedule: ${C_RESET}" choice
+        
+        local sched=""
         case $choice in
-            1) cron_schedule="0 3 * * *"; break ;;
-            2) cron_schedule="0 3 */3 * *"; break ;;
-            3) cron_schedule="0 3 * * 0"; break ;;
-            4) cron_schedule="0 3 * * 6"; break ;;
-            5) cron_schedule="0 3 1,15 * *"; break ;;
-            6) cron_schedule="0 3 1 * *"; break ;;
-            7) read -p "Enter custom cron schedule (e.g., '0 5 * * *' for 5 AM daily): " custom_cron
-               if [[ -n "$custom_cron" ]]; then cron_schedule="$custom_cron"; break; fi ;;
-            8) echo -e "${C_YELLOW}Cron job setup canceled.${C_RESET}"; return ;;
-            *) echo -e "${C_RED}Invalid option. Please try again.${C_RESET}"; sleep 1 ;;
+            1) sched="@reboot" ;;
+            2) sched="0 * * * *" ;;
+            3) sched="0 */6 * * *" ;;
+            4) sched="0 */12 * * *" ;;
+            5) sched="0 0 * * *" ;;
+            6) sched="0 3 * * *" ;;
+            7) sched="0 4 * * *" ;;
+            8) sched="0 3 * * 0" ;;
+            9) sched="0 3 * * 6" ;;
+            10) sched="0 4 1 * *" ;;
+            11) 
+                read -p "Enter custom format (e.g. '30 5 * * *'): " custom_in
+                if [[ -n "$custom_in" ]]; then sched="$custom_in"; fi 
+                ;;
+            12) return 1 ;;
+            *) echo -e "${C_RED}Invalid option.${C_RESET}"; sleep 1; continue ;;
         esac
-    done
 
-    echo -e "\n${C_YELLOW}Adding job to root's crontab...${C_RESET}"
-    local cron_command="$cron_schedule $SUDO_CMD SUDO_USER=${CURRENT_USER} $SCRIPT_PATH update-unused --cron"
-    local cron_comment="# Added by Docker Tool Suite to update unused Docker images"
-    
-    local current_crontab; current_crontab=$($SUDO_CMD crontab -u "$cron_target_user" -l 2>/dev/null || true)
-    
-    if echo "$current_crontab" | grep -Fq "update-unused"; then
-        echo -e "${C_CYAN}A cron job for this task already exists."
-        echo -e "${C_GRAY}Please edit it manually (sudo crontab -e).${C_RESET}"
-        sleep 1
-    else
-        local new_crontab
-        new_crontab=$(printf "%s\n%s\n%s\n" "$current_crontab" "$cron_comment" "$cron_command")
-
-        if ! echo "$new_crontab" | $SUDO_CMD crontab -u "$cron_target_user" -; then
-            echo -e "${C_RED}Error: Failed to install the cron job. The schedule '$cron_schedule' might be invalid.${C_RESET}"
-            echo -e "${C_YELLOW}Crontab was not modified.${C_RESET}"
-            return 1
+        if [[ -n "$sched" ]]; then
+            eval "$choice_ref='$sched'"
+            return 0
         fi
-        echo -e "${C_GREEN}${TICKMARK} Cron job added successfully!${C_RESET}"
-    fi
+    done
+}
+
+scheduler_menu() {
+    check_root
+
+    local cmd_app_update="$SUDO_CMD SUDO_USER=${CURRENT_USER} $SCRIPT_PATH update --cron"
+    local cmd_unused_update="$SUDO_CMD SUDO_USER=${CURRENT_USER} $SCRIPT_PATH update-unused --cron"
+    local id_app_update="$SCRIPT_PATH update --cron"
+    local id_unused_update="$SCRIPT_PATH update-unused --cron"
+    local -a scheduler_options
+
+    while true; do
+        local sched_app
+        sched_app=$(_get_current_cron_schedule "$id_app_update")
+        local sched_unused
+        sched_unused=$(_get_current_cron_schedule "$id_unused_update")
+
+        local status_app="${C_RED}[DISABLED]${C_RESET}"
+        local status_unused="${C_RED}[DISABLED]${C_RESET}"
+
+        [[ -n "$sched_app" ]] && status_app="${C_GREEN}[ACTIVE: ${sched_app}]${C_RESET}"
+        [[ -n "$sched_unused" ]] && status_unused="${C_GREEN}[ACTIVE: ${sched_unused}]${C_RESET}"
+
+        scheduler_options=(
+            "${C_RESET}App Auto-Update      $status_app"
+            "${C_RESET}Unused Image Update  $status_unused"
+        )
+
+        print_standard_menu "Scheduler Manager (Root)" scheduler_options "RQ"
+        read -p "${C_YELLOW}Select task to configure: ${C_RESET}" choice
+
+        local target_cmd=""
+        local target_id=""
+        local task_name=""
+        local current_sched=""
+
+        case "$choice" in
+            1) 
+                target_cmd="$cmd_app_update"
+                target_id="$id_app_update"
+                task_name="App Auto-Update"
+                current_sched="$sched_app"
+                ;;
+            2) 
+                target_cmd="$cmd_unused_update"
+                target_id="$id_unused_update"
+                task_name="Unused Image Pruner"
+                current_sched="$sched_unused"
+                ;;
+            [rR]) return ;;
+            [qQ]) exit 0 ;;
+            *) echo -e "${C_RED}Invalid option.${C_RESET}"; sleep 1; continue ;;
+        esac
+
+        echo -e "\n${C_RESET}----------------------------------------------"
+        echo -e "${C_CYAN}Configuring: $task_name${C_RESET}\n"
+        if [[ -n "$current_sched" ]]; then
+            echo -e "1) ${C_GREEN}Update Schedule${C_RESET}"
+            echo -e "2) ${C_RED}Remove Task${C_RESET}"
+            echo -e "3) ${C_GRAY}Cancel{C_RESET}\n${C_RESET}"
+            read -p "Choice: " sub_choice
+            case "$sub_choice" in
+                1) 
+                    local new_sched
+                    if _cron_schedule_picker "$task_name" new_sched; then
+                        _add_cron_task "$target_id" "$task_name" "$new_sched" "$target_cmd"
+                        sleep 2
+                    fi
+                    ;;
+                2) 
+                    _remove_cron_task "$target_id" "$task_name" 
+                    echo -e "${C_GREEN}Task removed.${C_RESET}"; sleep 2
+                    ;;
+                *) continue ;;
+            esac
+        else
+            echo -e "${C_YELLOW}Task is currently ${C_RED}disabled${C_YELLOW}.${C_RESET}\n"
+            read -p "${C_CYAN}Do you want to enable it? ${C_RESET}(${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}): " enable_opt
+            if [[ "${enable_opt,,}" =~ ^(y|yes)$ ]]; then
+                local new_sched
+                if _cron_schedule_picker "$task_name" new_sched; then
+                    _add_cron_task "$target_id" "$task_name" "$new_sched" "$target_cmd"
+                    sleep 2
+                fi
+            fi
+        fi
+    done
 }
 
 utility_menu() {
     local options=(
-        "Manage Settings"
         "Update all running Apps"
         "Update Unused Images"
         "Clean Up Docker System"
@@ -2271,11 +2393,10 @@ utility_menu() {
         print_standard_menu "Utilities" options "RQ"
         read -rp "${C_YELLOW}Please select an option: ${C_RESET}" choice
         case "$choice" in
-            1) settings_manager_menu ;;
-            2) app_manager_update_all_known_apps; echo -e "\nPress Enter to return..."; read -r ;;
-            3) update_unused_images_main; echo -e "\nPress Enter to return..."; read -r ;;
-            4) system_prune_main; echo -e "\nPress Enter to return..."; read -r ;;
-            5) log_manager_menu ;;
+            1) app_manager_update_all_known_apps; echo -e "\nPress Enter to return..."; read -r ;;
+            2) update_unused_images_main; echo -e "\nPress Enter to return..."; read -r ;;
+            3) system_prune_main; echo -e "\nPress Enter to return..."; read -r ;;
+            4) log_manager_menu ;;
             [rR]) return ;;
             [qQ]) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
@@ -2288,11 +2409,10 @@ _update_config_value() {
     local prompt_text="$2"
     local current_value="${3-}"
     local default_value="${4-}"
-    local validation_type="${5:-text}" # Types: text, int, path
-    local min_val="${6-}" # Optional Min
-    local max_val="${7-}" # Optional Max
+    local validation_type="${5:-text}" # Types: text, int, path, subdir
+    local min_val="${6-}"
+    local max_val="${7-}"
 
-    # Display helpful context
     if [[ -n "$default_value" ]]; then
         if [[ "$current_value" != "$default_value" ]]; then
              echo -e "${C_GRAY}Default: ${default_value} (Type '${C_RESET}reset${C_GRAY}' to restore)${C_RESET}"
@@ -2330,8 +2450,22 @@ _update_config_value() {
                 ;;
             path)
                 if [[ ! "$new_value" =~ ^(/|~|\.) ]]; then
-                    echo -e "${C_RED}Error: Input must be a valid path (start with /).${C_RESET}"
+                    echo -e "${C_RED}Error: Path must start with / (absolute), ~ (home), or . (relative).${C_RESET}"
                     valid=false
+                fi
+                if [[ "$new_value" =~ [\&\|\;\`\$] ]]; then
+                     echo -e "${C_RED}Error: Path contains invalid shell characters.${C_RESET}"
+                     valid=false
+                fi
+                ;;
+            subdir)
+                if [[ "$new_value" =~ ^(/|~) ]]; then
+                    echo -e "${C_RED}Error: Subdirectory must be a relative path (cannot start with / or ~).${C_RESET}"
+                    valid=false
+                fi
+                if [[ "$new_value" =~ [\&\|\;\`\$] ]]; then
+                     echo -e "${C_RED}Error: Name contains invalid shell characters.${C_RESET}"
+                     valid=false
                 fi
                 ;;
         esac
@@ -2339,7 +2473,6 @@ _update_config_value() {
         if $valid; then break; fi
     done
 
-    # Wrap in quotes for config file safety
     local replacement="\"${new_value}\""
 
     if grep -q "^${key}=" "$CONFIG_FILE"; then
@@ -2429,7 +2562,6 @@ update_ignored_items() {
 }
 
 settings_manager_menu() {
-    # Define defaults matching initial_setup for restoration
     local apps_path_def="/home/${CURRENT_USER}/apps"
     local managed_subdir_def="managed_stacks"
     local backup_path_def="/home/${CURRENT_USER}/backups/docker-volume-backups"
@@ -2446,8 +2578,7 @@ settings_manager_menu() {
         "Ignored Images"
         "Archive Settings"
         "Shell Alias"
-        "Schedule Apps Updater"
-        "Schedule Unused Image Updater"
+        "Task Scheduler"
     )
     while true; do
         print_standard_menu "Settings Manager" options "RQ"
@@ -2457,12 +2588,12 @@ settings_manager_menu() {
             1)
                 clear; echo -e "${C_YELLOW}--- Path Settings ---${C_RESET}\n"
                 _update_config_value "APPS_BASE_PATH" "Base Compose Apps Path" "$APPS_BASE_PATH" "$apps_path_def" "path"
-                _update_config_value "MANAGED_SUBDIR" "Managed Apps Subdirectory" "$MANAGED_SUBDIR" "$managed_subdir_def" "text"
+                _update_config_value "MANAGED_SUBDIR" "Managed Apps Subdirectory" "$MANAGED_SUBDIR" "$managed_subdir_def" "subdir"
                 _update_config_value "BACKUP_LOCATION" "Default Backup Location" "$BACKUP_LOCATION" "$backup_path_def" "path"
                 _update_config_value "RESTORE_LOCATION" "Default Restore Location" "$RESTORE_LOCATION" "$restore_path_def" "path"
                 _update_config_value "LOG_DIR" "Log Directory Path" "$LOG_DIR" "$log_dir_def" "path"
-                _update_config_value "LOG_SUBDIR_UPDATE" "Update Logs Subdir" "${LOG_SUBDIR_UPDATE:-apps-update-logs}" "apps-update-logs" "text"
-                _update_config_value "LOG_SUBDIR_UNUSED" "Unused Logs Subdir" "${LOG_SUBDIR_UNUSED:-unused-images-update-logs}" "unused-images-update-logs" "text"
+                _update_config_value "LOG_SUBDIR_UPDATE" "Update Logs Subdir" "${LOG_SUBDIR_UPDATE:-apps-update-logs}" "apps-update-logs" "subdir"
+                _update_config_value "LOG_SUBDIR_UNUSED" "Unused Logs Subdir" "${LOG_SUBDIR_UNUSED:-unused-images-update-logs}" "unused-images-update-logs" "subdir"
                 
                 echo -e "\n${C_CYAN}Path settings updated. Press Enter...${C_RESET}"; read -r
                 ;;
@@ -2490,11 +2621,7 @@ settings_manager_menu() {
                 echo -e "\nPress Enter to return..."; read -r
                 ;;
             7)
-                setup_cron_job
-                echo -e "\nPress Enter to return..."; read -r
-                ;;
-            8)
-                setup_unused_images_cron_job
+                scheduler_menu
                 echo -e "\nPress Enter to return..."; read -r
                 ;;
             [rR]) return ;;
@@ -2509,6 +2636,7 @@ main_menu() {
         "Application Manager"
         "Volume Manager"
         "Utilities"
+        "Settings Manager"
     )
     while true; do
         print_standard_menu "Docker Tool Suite ${SCRIPT_VERSION} - ${C_CYAN}${CURRENT_USER}" options "Q"
@@ -2518,6 +2646,7 @@ main_menu() {
             1) app_manager_menu ;;
             2) volume_manager_menu ;;
             3) utility_menu ;;
+            4) settings_manager_menu ;;
             [qQ]) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
             *) echo -e "\n${C_RED}Invalid option: '$choice'.${C_RESET}"; sleep 1 ;;
         esac
@@ -2534,24 +2663,25 @@ if [[ $# -gt 0 ]]; then
         --help|-h)
             echo -e "${C_RESET}=============================================="
             echo -e " ${C_GREEN}Docker Tool Suite ${C_CYAN}${SCRIPT_VERSION}${C_RESET} - Help Menu"
-            echo -e "${C_RESET}=============================================="
+            echo -e "${C_RESET}==============================================\n"
             echo -e " ${C_YELLOW}Description:${C_RESET}"
             echo -e "   A self-hosted CLI tool to manage Docker Compose stacks,"
             echo -e "   volumes, backups, logs, and automated updates."
             echo
             echo -e " ${C_YELLOW}Usage:${C_RESET}"
             echo -e "   ${C_CYAN}./$(basename "$0") ${C_GREEN}[command] ${C_GRAY}[options]${C_RESET}"
+            echo -e "    ${C_GRAY}(or configured alias) [command] [options]${C_RESET}"
             echo
             echo -e " ${C_YELLOW}Commands:${C_RESET}"
-            echo -e "   ${C_GREEN}(no args)${C_RESET}       Launch the interactive TUI menu."
+            echo -e "   ${C_GRAY}(no args)${C_RESET}       Launch the interactive TUI menu."
+            echo -e "   ${C_GREEN}--help${C_RESET}          Show this help message."
             echo -e "   ${C_GREEN}update${C_RESET}          Update all running compose applications."
             echo -e "   ${C_GREEN}update-unused${C_RESET}   Update unused images and prune dangling ones."
-            echo -e "   ${C_GREEN}--help${C_RESET}          Show this help message."
             echo
             echo -e " ${C_YELLOW}Options (for updates):${C_RESET}"
-            echo -e "   ${C_GREEN}--cron${C_RESET}          Optimized for scheduled tasks (logs to file)."
+            echo -e "   ${C_GREEN}--cron${C_RESET}          Optimized for scheduled tasks."
             echo -e "   ${C_GREEN}--dry-run${C_RESET}       Simulate actions without making changes."
-            echo -e "${C_RESET}==============================================${C_RESET}"
+            echo -e "${C_RESET}==============================================${C_RESET}\n"
             exit 0 ;;
     esac
 
@@ -2617,7 +2747,6 @@ if [[ $# -gt 0 ]]; then
 fi
 
 # --- Config Validation & Startup ---
-
 if [[ ! -f "$CONFIG_FILE" ]]; then
     initial_setup
 fi

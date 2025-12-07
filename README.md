@@ -1,91 +1,52 @@
 # Docker Tool Suite (dtools)
 
-A powerful, self-hosted Bash script designed to simplify the management of Docker Compose applications on Linux servers. It provides a Text User Interface (TUI) to handle updates, backups, logs, and system maintenance without needing to remember complex Docker commands.
+A Bash script with a Text User Interface (TUI) to simplify managing Docker Compose applications, backups, and updates on Linux servers.
 
 ## 🚀 Features
 
-### 🐳 Application Management
-- **Interactive Control:** Start, Stop, and Restart essential or managed app stacks.
-- **Smart Updates:** Checks for image hash changes before recreating containers.
-- **Rollback System:** Keeps a local history of image IDs, allowing you to quickly rollback an application to a previous version if an update fails.
-- **Force Recreate:** Option to force container recreation (useful for config changes).
-- **Interactive Error Recovery:** Automatically detects invalid Docker Compose configurations and prompts you to edit and fix them on the fly.
-
-### 💾 Volume & Backup Manager
-- **Smart Backups:** Automatically detects which volumes belong to which application. Stops the app, backs up the volume, and restarts the app to ensure data consistency.
-- **Standalone Backups:** Detects and backs up volumes not attached to specific projects.
-- **Secure Archives:** Compresses backups using `tar` + `zstd`. Optionally creates encrypted, password-protected 7-Zip archives (AES-256, split-volume supported).
-- **Volume Explorer:** Mounts a volume into a temporary interactive shell to inspect files without attaching to the main container.
-- **Restore Wizard:** Easily restore volumes from previous backups.
-
-### ⚙️ Automation & Utilities
-- **Shell Integration:** Easily create and manage a `dtools` alias. Auto-detects your shell (`bash`/`zsh`), validates alias names to prevent conflicts, and creates configuration files if they are missing.
-- **Cron Integration:** Built-in scheduler for automatic app updates and unused image cleanup.
-- **Log Management:** Centralized log viewer with auto-pruning (retention policies).
-- **System Prune:** Guided clean-up of stopped containers, unused networks, and build caches.
-- **Security:** Encrypts sensitive configuration passwords (like RAR passwords) using a machine-specific key (OpenSSL).
-- **Smart Setup:** Auto-detects missing dependencies, verifies Docker Daemon health, and performs configuration integrity checks on startup to auto-correct invalid values (like corrupted integers).
-
-## 📋 Prerequisites
-
-The script runs on Debian-based systems. It automatically checks for required tools and offers to install them if missing:
-- **Docker** & **Docker Compose V2**
-- `openssl` (Required for password encryption)
-- `p7zip-full` (Optional, for creating secure archives)
-- Root/Sudo privileges (Script will prompt for password if not run as root)
+- **App Management:** Start, stop, restart, and force recreate containers. Includes an update checker to only recreate changed images.
+- **Backups:** Auto-detects and backs up volumes for specific apps or standalone volumes. Supports `zstd` compression and encrypted `7-Zip` archives.
+- **Automation:** Built-in scheduler (Cron) for automatic app updates and cleaning up unused images.
+- **Maintenance:** View logs, prune system (unused containers/networks), and manage local image history for rollbacks.
+- **Safety:** Includes "Dry Run" modes and validates configuration inputs (paths, integers) to prevent errors.
 
 ## 🛠️ Installation
 
-1. Clone the repository:
+1. **Clone the repo:**
    ```bash
    git clone https://github.com/Pavdig/dtools.git
    cd dtools
-   ```
-
-2. Make the script executable:
+2. **Make executable:**
    ```bash
    chmod +x docker_tool_suite.sh
    ```
 
-3. Run the script:
+3. **Run:**
    ```bash
    ./docker_tool_suite.sh
-   # The script will prompt for sudo password if required.
-*On the first run, the script will guide you through a setup wizard to define your app directories, backup locations, retention policies, and optional shell shortcuts.*
+   ```
+   *The script will auto-install dependencies (openssl, 7zip) and guide you through the initial setup wizard.*
 
 ## 📖 Usage
 
-### Interactive Mode (TUI)
-Simply run the script with sudo (or use your configured alias) to access the main menu:
+**Interactive Mode:**
+Run with sudo to access the menu:
 ```bash
 sudo ./docker_tool_suite.sh
-# OR if alias is configured:
-sudo dtools
+# or if you set up the default alias:
+dtools
 ```
 
-### CLI / Cron Mode
-The script supports non-interactive flags for scheduled tasks:
+**CLI (Cron) Mode:**
+```bash
+# Update all apps
+sudo ./docker_tool_suite.sh update --cron
 
-- **Update all apps:**
-  ```bash
-  sudo ./docker_tool_suite.sh update --cron
-  ```
-- **Clean unused images:**
-  ```bash
-  sudo ./docker_tool_suite.sh update-unused --cron
-  ```
-- **Dry Run (Simulation):**
-  ```bash
-  sudo ./docker_tool_suite.sh update --dry-run
-  ```
+# Clean unused images
+sudo ./docker_tool_suite.sh update-unused --cron
+```
 
 ## 📂 Configuration
 
-Configuration is stored securely in `~/.config/dtools/config.conf`. You can change settings (paths, ignored volumes, helper images) directly via the **Utilities > Manage Settings** menu inside the script.
-
-**Safe Reset:** If you make a mistake while editing a setting (like a helper image tag), simply type `reset` when prompted to revert that setting to its original default value.
-
-The script includes strict input validation (path autocompletion, integer ranges) to prevent invalid configurations from being saved.
-
-## ⚠️ Disclaimer
-This tool performs operations that modify your Docker containers and volumes. While it includes safety checks (like dry-runs and confirmations), always ensure you have valid backups before performing system prunes or volume restorations.
+Settings are stored in `~/.config/dtools/config.conf`.
+You can change paths, retention policies, and helper images directly inside the script via **Settings Manager** in the main menu.
