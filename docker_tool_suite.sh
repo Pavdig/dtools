@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.4.9.9
+SCRIPT_VERSION=v1.4.5
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -314,7 +314,7 @@ show_selection_menu() {
         done
         echo "-----------------------------------------------------"
         echo -e "Enter a (${C_GREEN}No.${C_RESET}) to toggle, ${C_CYAN}(a)ll${C_RESET}, ${C_YELLOW}(${action_verb}) ${C_RESET}to ${C_YELLOW}${action_verb}${C_RESET}, ${C_GRAY}(r)eturn ${C_RESET}or ${C_RED}(q)uit${C_RESET}."
-        read -rp "Your choice: " choice
+        read -erp "Your choice: " choice
         case "$choice" in
             "${action_verb}")
                 local any_selected=false
@@ -389,14 +389,12 @@ configure_shell_alias() {
             read -p "Enter alias name [${C_GREEN}${default_alias}${C_RESET}]: " alias_name
             alias_name=${alias_name:-$default_alias}
 
-            # Validation for alias name (Alphanumeric and underscore only)
             if [[ ! "$alias_name" =~ ^[a-zA-Z0-9_]+$ ]]; then
                 echo -e "\n${C_RED}Error: Invalid alias name. Use only letters, numbers, and underscores.${C_RESET}"
                 echo -e "${C_GRAY}Characters like '/' or spaces are not allowed.${C_RESET}"; sleep 2
                 return
             fi
 
-            # Check if alias is already taken by something else
             if grep -q "^alias ${alias_name}=" "$shell_rc" && ! grep -q "^alias ${alias_name}='${SCRIPT_PATH}'" "$shell_rc"; then
                 echo -e "\n${C_RED}Error: The alias '${alias_name}' is already defined in ${shell_rc} pointing to something else.${C_RESET}"
                 echo -e "${C_YELLOW}Please choose a different name.${C_RESET}"; sleep 2
@@ -404,20 +402,13 @@ configure_shell_alias() {
             fi
 
             local new_alias_line="alias ${alias_name}='${SCRIPT_PATH}'"
-            
-            # Safe removal of OLD alias to this script (rebuild file)
             local temp_rc; temp_rc=$(mktemp)
-            
-            # Filter out the specific comment and any alias pointing to THIS script
+
             grep -v -F "$comment_line" "$shell_rc" | grep -v "alias .*='${SCRIPT_PATH}'" > "$temp_rc"
-            
-            # Append new
             echo "$comment_line" >> "$temp_rc"
             echo "$new_alias_line" >> "$temp_rc"
-            
             mv "$temp_rc" "$shell_rc"
             chown "${CURRENT_USER}:${CURRENT_USER}" "$shell_rc"
-            
             echo -e "\n${C_GREEN}${TICKMARK} Alias '${alias_name}' added to ${shell_rc}!${C_RESET}"
             echo -e "${C_GRAY}NOTE: Run 'source ${shell_rc}' or restart your terminal to use it.${C_RESET}"
             ;;
@@ -428,8 +419,6 @@ configure_shell_alias() {
             fi
 
             echo -e "\n${C_YELLOW}Removing alias...${C_RESET}"
-            
-            # Safe removal logic using grep
             local temp_rc; temp_rc=$(mktemp)
             grep -v -F "$comment_line" "$shell_rc" | grep -v "alias .*='${SCRIPT_PATH}'" > "$temp_rc"
             mv "$temp_rc" "$shell_rc"
@@ -452,7 +441,6 @@ ensure_tool_installed() {
         read -p "${C_YELLOW}Do you want to install '${C_CYAN}${package_name}${C_YELLOW}' now? ${C_RESET}(${C_GREEN}Y${C_RESET}/${C_RED}n${C_RESET}): " install_tool
         if [[ "${install_tool:-y}" =~ ^(y|Y|yes|YES)$ ]]; then
              echo -e "${C_CYAN}Installing ${package_name}...${C_RESET}"
-             # Use SUDO_CMD. Run update and install separately to handle errors correctly.
              if $SUDO_CMD apt-get update && $SUDO_CMD apt-get install -y "$package_name"; then
                  echo -e "${C_GREEN}Installation successful.${C_RESET}"
                  return 0
@@ -1002,7 +990,7 @@ _rollback_app_task() {
     fi
 
     read -p "Enter number to rollback to (or 'q' to cancel): " choice
-    if [[ "${choice,,}" == "q" ]]; then return; fi
+    if [[ "${choice,,}" == "q" || "${choice,,}" == "Q" ]]; then return; fi
 
     if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#valid_choices[@]}" ]; then
         local selected_line="${valid_choices[$((choice-1))]}"
@@ -1084,7 +1072,7 @@ app_manager_interactive_handler() {
 
         print_standard_menu "Manage ${app_type_name} Apps" options "RQ"
         
-        read -rp "${C_YELLOW}Please select an option: ${C_RESET}" choice
+        read -erp "${C_YELLOW}Please select an ${C_CYAN}option${C_RESET}: " choice
 
         local action=""
         local title=""
@@ -1250,13 +1238,13 @@ app_manager_menu() {
     )
     while true; do
         print_standard_menu "Application Manager" options "RQ"
-        read -rp "${C_YELLOW}Please select an option: ${C_RESET}" choice
+        read -erp "${C_YELLOW}Please select an ${C_CYAN}option${C_RESET}: " choice
         case "$choice" in
             1) app_manager_status ;;
             2) app_manager_interactive_handler "Essential" "$APPS_BASE_PATH" "$APPS_BASE_PATH" ;;
             3) app_manager_interactive_handler "Managed" "$APPS_BASE_PATH/$MANAGED_SUBDIR" "$APPS_BASE_PATH/$MANAGED_SUBDIR" ;;
             4) 
-                read -rp "$(printf "\n${C_LIGHT_RED}This will stop ALL running compose applications. Are you sure? [y/N]: ${C_RESET}")" confirm
+                read -rp "$(printf "\n${C_LIGHT_RED}This will stop ALL running compose applications. Are you sure? ${C_RESET}[${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}]: ${C_RESET}")" confirm
                 if [[ "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then
                     app_manager_stop_all
                 else
@@ -1365,7 +1353,7 @@ volume_checker_explore() {
 
 volume_checker_remove() {
     local volume_name="$1"
-    read -rp "$(printf "\n${C_YELLOW}Permanently delete volume '${C_CYAN}%s${C_YELLOW}'? [y/N]: ${C_RESET}" "${volume_name}")" confirm
+    read -rp "$(printf "\n${C_YELLOW}Permanently delete volume '${C_CYAN}%s${C_YELLOW}'? ${C_RESET}[${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}]: ${C_RESET}" "${volume_name}")" confirm
     if [[ "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then
         echo -e "-> Deleting volume '${volume_name}'..."
         if execute_and_log $SUDO_CMD docker volume rm "${volume_name}"; then echo -e "${C_GREEN}Volume successfully deleted.${C_RESET}"; sleep 2; return 0; else echo -e "${C_RED}Error: Failed to delete. It might be in use.${C_RESET}"; sleep 3; return 1; fi
@@ -1715,7 +1703,7 @@ volume_smart_backup_main() {
     [[ -n "$archive_split_opt" ]] && sevenz_cmd+=("$archive_split_opt")
 
     # Map compression: 7z levels are 0-9. (mx=0 is copy, mx=9 is ultra). 
-    # Your default 3 is "Fast" in 7z, which is fine.
+    # Default 3 is "Fast" in 7z.
     sevenz_cmd+=("-mx=${ARCHIVE_COMPRESSION_LEVEL:-3}" "-y")
 
     if [[ -n "$archive_password" ]]; then
@@ -1873,7 +1861,7 @@ volume_manager_menu() {
     )
     while true; do
         print_standard_menu "Volume Manager" options "RQ"
-        read -rp "${C_YELLOW}Please select an option: ${C_RESET}" choice
+        read -erp "${C_YELLOW}Please select an ${C_CYAN}option${C_RESET}: " choice
         case "$choice" in
             1) 
                 volume_smart_backup_main
@@ -1901,7 +1889,7 @@ system_prune_main() {
     echo "  - all dangling images"
     echo "  - all build cache"
     echo ""
-    read -rp "$(printf "${C_LIGHT_RED}This action is IRREVERSIBLE. Are you sure? [y/N]: ${C_RESET}")" confirm
+    read -rp "$(printf "${C_LIGHT_RED}This action is IRREVERSIBLE. Are you sure? ${C_RESET}[${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}]: ${C_RESET}")" confirm
     if [[ "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then
         echo -e "\n${C_YELLOW}Pruning system...${C_RESET}"
         log "Running Docker System Prune..."
@@ -2014,7 +2002,7 @@ log_manager_menu() {
     )
     while true; do
         print_standard_menu "Log Manager" options "RQ"
-        read -rp "${C_YELLOW}Please select an option: ${C_RESET}" choice
+        read -erp "${C_YELLOW}Please select an ${C_CYAN}option${C_RESET}: " choice
         case "$choice" in
             1) _log_viewer_select_and_view ;;
             2) log_remover_main; echo -e "\nPress Enter to return..."; read -r ;;
@@ -2384,21 +2372,169 @@ scheduler_menu() {
     done
 }
 
+# --- Image Healthcheck ---
+_check_single_image_health() {
+    local img=$1
+    local output_res
+    output_res=$($SUDO_CMD docker inspect --format '{{if .Config.Healthcheck}}'${TICKMARK}' YES{{else}}'${C_RED}'X NO{{end}}' "$img" 2>/dev/null)
+
+    if [ -z "$output_res" ]; then
+        printf "%-55s %b\n" "$img" "${C_RED}Not found locally.${C_RESET}"
+    else
+        printf "%-55s %b\n" "$img" "${C_YELLOW}$output_res${C_RESET}"
+    fi
+}
+
+image_healthcheck_main() {
+    local options=(
+        "Check ALL images on the system ${C_GRAY}(Batch)${C_RESET}"
+        "Select ONE local image ${C_GRAY}(List)${C_RESET}"
+        "Check a custom/remote image"
+    )
+
+    while true; do
+        print_standard_menu "Image Healthcheck Inspector" options "RQ"
+        
+        read -erp "${C_YELLOW}Please select an ${C_CYAN}option: ${C_RESET}" choice
+
+        case "$choice" in
+            1)
+                echo -e "\n${C_YELLOW}Checking all local images...${C_RESET}"
+                echo "------------------------------------------------------------"
+                printf "%-55s %s\n" "${C_CYAN}IMAGE NAME" "HEALTHCHECK${C_RESET}"
+                $SUDO_CMD docker image ls --format "{{.Repository}}:{{.Tag}}" | grep -v "<none>" | while read -r img; do
+                    _check_single_image_health "$img"
+                done
+                echo
+                read -p "${C_GRAY}Press Enter to return...${C_RESET}"
+                ;;
+            2)
+                echo -e "\n${C_YELLOW}Loading local images...${C_RESET}"
+                mapfile -t local_images < <($SUDO_CMD docker image ls --format "{{.Repository}}:{{.Tag}}" | grep -v "<none>" | sort)
+                
+                if [ ${#local_images[@]} -eq 0 ]; then
+                    echo -e "${C_RED}No images found.${C_RESET}"; sleep 1; continue
+                fi
+
+                echo -e "${C_CYAN}Select an image to check:${C_RESET}"
+                PS3=$'\n'"${C_YELLOW}Enter number ${C_GRAY}(or 'q' to cancel)${C_RESET}: "
+                select img_choice in "${local_images[@]}"; do
+                    if [[ "$REPLY" == "q" || "$REPLY" == "Q" ]]; then break; fi
+                    if [[ -n "$img_choice" ]]; then
+                        echo "------------------------------------------------------------"
+                        printf "%-55s %s\n" "${C_CYAN}IMAGE NAME" "HEALTHCHECK${C_RESET}"
+                        _check_single_image_health "$img_choice"
+                        echo "------------------------------------------------------------"
+                        break
+                    else
+                        echo -e "${C_RED}Invalid selection.${C_RESET}"
+                    fi
+                done
+                
+                if [[ "$REPLY" != "q" && "$REPLY" != "Q" ]]; then
+                    read -p "${C_GRAY}Press Enter to return...${C_RESET}"
+                fi
+                ;;
+            3)
+                echo
+                while true; do
+                    echo -e "${C_YELLOW}This will pull from registry if not found locally${C_RESET}"
+                    read -e -p "${C_CYAN}Enter image name ${C_GRAY}(e.g. nginx:latest)${C_RESET}: " custom_img
+
+                    if [[ -z "$custom_img" ]]; then break; fi
+
+                    if [[ ! "$custom_img" =~ ^[a-zA-Z0-9/._:-]+$ ]]; then
+                        echo -e "${C_RED}Invalid characters in image name.${C_RESET}"
+                        continue
+                    fi
+
+                    local explicit_tag=true
+                    if [[ "$custom_img" != *:* ]]; then
+                        explicit_tag=false
+                        echo -e "${C_YELLOW}Note: No tag provided. Docker will look for ':latest'.${C_RESET}"
+                    fi
+
+                    local image_existed_before=false
+                    if $SUDO_CMD docker image inspect "$custom_img" &> /dev/null; then
+                        image_existed_before=true
+                    fi
+
+                    echo "------------------------------------------------------------"
+                    echo -e "${C_YELLOW}Pulling ${C_CYAN}$custom_img${C_YELLOW}...${C_RESET}"
+                    
+                    local pull_output
+                    local exit_code=0
+
+                    pull_output=$($SUDO_CMD docker pull "$custom_img" 2>&1) || exit_code=$?
+
+                    log "Pulling custom image: $custom_img"
+
+                    if [ $exit_code -eq 0 ]; then
+                        echo "------------------------------------------------------------"
+                        echo -e "${C_YELLOW}Result:${C_RESET}\n"
+                        printf "%-55s %s\n" "${C_CYAN}IMAGE NAME" "HEALTHCHECK${C_RESET}"
+                        _check_single_image_health "$custom_img"
+                        echo -e "\n------------------------------------------------------------"
+
+                        if [ "$image_existed_before" = false ]; then
+                            echo -e "${C_YELLOW}Cleanup:${C_RESET} This image was downloaded specifically for this check.\n"
+                            read -rp "${C_YELLOW}Do you want to remove '${C_CYAN}${custom_img}${C_YELLOW}' now? ${C_RESET}[${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}]: ${C_RESET}" cleanup_choice
+                            if [[ "$cleanup_choice" =~ ^[yY]$ ]]; then
+                                echo -e "${C_YELLOW}Removing image...${C_RESET}"
+                                $SUDO_CMD docker rmi "$custom_img"
+                                echo -e "${C_GREEN}Image removed.${C_RESET}"
+                            else
+                                echo -e "${C_GRAY}Image kept.${C_RESET}"
+                            fi
+                        fi
+                    else
+                        log "Error pulling image $custom_img"
+                        
+                        echo "------------------------------------------------------------"
+                        echo -e "${C_RED}Failed to pull image.${C_RESET}\n"
+                        echo -e "${C_YELLOW}Docker Error Message:${C_RESET}"
+                        echo "$pull_output"
+                        
+                        if [[ "$pull_output" == *"manifest unknown"* || "$pull_output" == *"not found"* ]]; then
+                            if [ "$explicit_tag" = false ]; then
+                                echo -e "\n${C_CYAN}Tip:${C_YELLOW} The error 'manifest unknown' often means the ${C_GREEN}:latest${C_YELLOW} tag does not exist."
+                                echo -e "Try specifying a specific tag, e.g., ${C_GREEN}:main${C_YELLOW}, ${C_GREEN}:release, ${C_GREEN}:stable, or a version number.${C_RESET}"
+                            fi
+                        fi
+                    fi
+                    break
+                done
+                
+                echo
+                read -p "Press Enter to return..."
+                ;;
+            [rR]) return ;;
+            [qQ]) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
+            *)
+                echo -e "\n${C_RED}Invalid option.${C_RESET}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
 utility_menu() {
     local options=(
         "Update all running Apps"
         "Update Unused Images"
         "Clean Up Docker System"
+        "Image Healthcheck Inspector"
         "Log Manager"
     )
     while true; do
         print_standard_menu "Utilities" options "RQ"
-        read -rp "${C_YELLOW}Please select an option: ${C_RESET}" choice
+        read -erp "${C_YELLOW}Please select an ${C_CYAN}option${C_RESET}: " choice
         case "$choice" in
             1) app_manager_update_all_known_apps; echo -e "\nPress Enter to return..."; read -r ;;
             2) update_unused_images_main; echo -e "\nPress Enter to return..."; read -r ;;
             3) system_prune_main; echo -e "\nPress Enter to return..."; read -r ;;
-            4) log_manager_menu ;;
+            4) image_healthcheck_main ;;
+            5) log_manager_menu ;;
             [rR]) return ;;
             [qQ]) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 1 ;;
@@ -2533,8 +2669,6 @@ update_ignored_items() {
 
         if [[ "$line" =~ ^${config_key}=\($ ]]; then
             in_target_block=true
-            
-            # Print the header comment and the new block
             echo "$comment_line" >> "$temp_file"
             echo "${config_key}=(" >> "$temp_file"
             if [ ${#new_ignored_list[@]} -gt 0 ]; then
@@ -2584,7 +2718,7 @@ settings_manager_menu() {
     )
     while true; do
         print_standard_menu "Settings Manager" options "RQ"
-        read -rp "${C_YELLOW}Please select an option: ${C_RESET}" choice
+        read -erp "${C_YELLOW}Please select an ${C_CYAN}option${C_RESET}: " choice
         
         case "$choice" in
             1)
@@ -2643,7 +2777,7 @@ main_menu() {
     while true; do
         print_standard_menu "Docker Tool Suite ${SCRIPT_VERSION} - ${C_CYAN}${CURRENT_USER}" options "Q"
         
-        read -rp "${C_YELLOW}Please select an option: ${C_RESET}" choice
+        read -erp "${C_YELLOW}Please select an ${C_CYAN}option${C_RESET}: " choice
         case "$choice" in
             1) app_manager_menu ;;
             2) volume_manager_menu ;;
@@ -2658,7 +2792,6 @@ main_menu() {
 # --- Argument Parsing at script entry ---
 if [[ $# -gt 0 ]]; then
     if [[ ! -f "$CONFIG_FILE" ]]; then echo -e "${C_RED}Config not found. Please run with 'sudo' for initial setup.${C_RESET}"; exit 1; fi
-    # Security: Ensure config is locked down before reading
     chmod 600 "$CONFIG_FILE" 2>/dev/null || true
 
     case "$1" in
@@ -2760,11 +2893,8 @@ if [[ -f "$CONFIG_FILE" ]]; then
     load_config "$CONFIG_FILE"
     validate_loaded_config
 
-    # Sanity Check: If APPS_BASE_PATH is missing, the config is likely broken
     if [[ -z "${APPS_BASE_PATH-}" ]]; then
         echo -e "${C_RED}Error: Configuration file is empty or corrupt.${C_RESET}"
-
-        # Backup the broken file
         backup_conf="${CONFIG_FILE}.$(date +%Y-%m-%d_%H-%M-%S).broken"
         mv "$CONFIG_FILE" "$backup_conf"
         echo -e "${C_YELLOW}Backed up broken config to: ${C_GRAY}${backup_conf}${C_RESET}"
