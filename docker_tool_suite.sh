@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.4.5
+SCRIPT_VERSION=v1.5.0
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
