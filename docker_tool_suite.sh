@@ -3,22 +3,34 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.5.0
+SCRIPT_VERSION=v1.5.0.1
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
 DRY_RUN=false
 IS_CRON_RUN=false
 
-# --- Cosmetics ---
-C_RED=$'\e[0;31m'
-C_LIGHT_RED=$'\e[1;31m'
-C_GREEN=$'\e[0;32m'
-C_YELLOW=$'\e[1;33m'
-C_CYAN=$'\e[0;36m'
-C_GRAY=$'\e[90m'
-C_RESET=$'\e[0m'
-TICKMARK=$'\e[32m\xE2\x9C\x93'
+# --- Initialize Terminal Cosmetics ---
+if tput setaf 1 > /dev/null 2>&1; then
+    C_RED=$(tput setaf 1)
+    C_GREEN=$(tput setaf 2)
+    C_YELLOW=$(tput setaf 3)
+    C_CYAN=$(tput setaf 6)
+    T_BOLD=$(tput bold)
+    C_GRAY=$(tput bold)$(tput setaf 0)
+    C_RESET=$(tput sgr0)
+else
+    C_RED=""
+    C_GREEN=""
+    C_YELLOW=""
+    C_CYAN=""
+    T_BOLD=""
+    C_GRAY=""
+    C_RESET=""
+fi
+
+TICKMARK="${C_GREEN}\xE2\x9C\x93${C_RESET}"
+
 
 # --- Standardized Footer Options ---
 optionsRandQ=(
@@ -112,9 +124,9 @@ print_standard_menu() {
     local footer_mode="${3:-RQ}"
 
     clear
-    echo -e "${C_RESET}=============================================="
-    echo -e " ${C_GREEN}${title}"
-    echo -e "${C_RESET}=============================================="
+    echo "=============================================="
+    echo -e " ${C_GREEN}${T_BOLD}${title}${C_RESET}"
+    echo "=============================================="
     
     echo -e " ${C_YELLOW}Options: "
     for i in "${!_menu_options[@]}"; do
@@ -307,7 +319,7 @@ show_selection_menu() {
     while true; do
         clear
         echo -e "====================================================="
-        echo -e " ${C_GREEN}${title}${C_RESET}"
+        echo -e " ${C_GREEN}${T_BOLD}${title}${C_RESET}"
         echo -e "====================================================="
         for i in "${!all_items_ref[@]}"; do
             if ${selected_status_ref[$i]}; then echo -e " $((i+1)). ${C_GREEN}[x]${C_RESET} ${all_items_ref[$i]}"; else echo -e " $((i+1)). ${C_RED}[ ]${C_RESET} ${all_items_ref[$i]}"; fi
@@ -409,7 +421,7 @@ configure_shell_alias() {
             echo "$new_alias_line" >> "$temp_rc"
             mv "$temp_rc" "$shell_rc"
             chown "${CURRENT_USER}:${CURRENT_USER}" "$shell_rc"
-            echo -e "\n${C_GREEN}${TICKMARK} Alias '${alias_name}' added to ${shell_rc}!${C_RESET}"
+            echo -e "\n${TICKMARK} Alias '${alias_name}' added to ${shell_rc}!${C_RESET}"
             echo -e "${C_GRAY}NOTE: Run 'source ${shell_rc}' or restart your terminal to use it.${C_RESET}"
             ;;
         2)
@@ -424,7 +436,7 @@ configure_shell_alias() {
             mv "$temp_rc" "$shell_rc"
             
             chown "${CURRENT_USER}:${CURRENT_USER}" "$shell_rc"
-            echo -e "${C_GREEN}${TICKMARK} Alias removed successfully.${C_RESET}"
+            echo -e "${TICKMARK} ${C_GREEN}Alias removed successfully.${C_RESET}"
             ;;
         *) return ;;
     esac
@@ -519,11 +531,11 @@ _prompt_input() {
 initial_setup() {
     check_root
     clear
-    echo -e "${C_RESET}====================================================="
-    echo -e "${C_GREEN} Welcome to the ${C_CYAN}Docker Tool Suite ${SCRIPT_VERSION} ${C_GREEN}Setup!"
-    echo -e "${C_RESET}=====================================================\n"
+    echo "====================================================="
+    echo -e "${C_GREEN}${T_BOLD} Welcome to the ${C_CYAN}Docker Tool Suite ${SCRIPT_VERSION} ${C_GREEN}Setup!${C_RESET}"
+    echo "====================================================="
 
-    echo -e "${C_YELLOW}--- Checking System Dependencies ---${C_RESET}"
+    echo -e "\n${C_YELLOW}--- Checking System Dependencies ---${C_RESET}"
     local -a packages_to_install=()
 
     if ! command -v openssl &>/dev/null; then 
@@ -547,7 +559,7 @@ initial_setup() {
             echo -e "${C_CYAN}Updating package lists and installing...${C_RESET}"
             $SUDO_CMD apt-get update
             $SUDO_CMD apt-get install -y "${packages_to_install[@]}"
-            echo -e "${C_GREEN}${TICKMARK} Dependencies installed successfully.${C_RESET}"
+            echo -e "${TICKMARK} ${C_GREEN}Dependencies installed successfully.${C_RESET}"
         else
             echo -e "${C_RED}Warning: Script may fail without these dependencies.${C_RESET}"
             sleep 2
@@ -753,7 +765,7 @@ initial_setup() {
         configure_shell_alias
     fi
 
-    echo -e "\n${C_GREEN}${TICKMARK} Setup complete! The script will now continue.${C_RESET}\n"; sleep 2
+    echo -e "\n${TICKMARK} ${C_GREEN}Setup complete! The script will now continue.${C_RESET}\n"; sleep 2
 }
 
 validate_and_edit_compose() {
@@ -765,7 +777,7 @@ validate_and_edit_compose() {
         if ! config_output=$($SUDO_CMD docker compose -f "$compose_file" config 2>&1); then
             log "ERROR: Invalid Compose configuration for '$app_name'."
             
-            echo -e "${C_LIGHT_RED}Validation failed for '$app_name':${C_RESET}"
+            echo -e "${C_RED}Validation failed for '$app_name':${C_RESET}"
             echo -e "${C_GRAY}----------------------------------------${C_RESET}"
             echo -e "${config_output}"
             echo -e "${C_GRAY}----------------------------------------${C_RESET}"
@@ -783,7 +795,7 @@ validate_and_edit_compose() {
                 echo -e "${C_CYAN}File saved. Retrying validation...${C_RESET}"
                 continue
             else
-                echo -e "${C_LIGHT_RED}Skipping '$app_name'.${C_RESET}"
+                echo -e "${C_YELLOW}Skipping '$app_name'.${C_RESET}"
                 return 1
             fi
         else
@@ -808,7 +820,7 @@ _start_app_task() {
         echo -e "${C_GREEN}Successfully started '$app_name'.${C_RESET}"
     else
         log "ERROR: Failed to start '$app_name'."
-        echo -e "${C_LIGHT_RED}Failed to start '$app_name'. Check log for details.${C_RESET}"
+        echo -e "${C_RED}Failed to start '$app_name'. Check log for details.${C_RESET}"
     fi
 }
 
@@ -825,7 +837,7 @@ _stop_app_task() {
         echo -e "${C_GREEN}Successfully stopped '$app_name'.${C_RESET}"
     else
         log "ERROR: Failed to stop '$app_name'."
-        echo -e "${C_LIGHT_RED}Failed to stop '$app_name'. Check log for details.${C_RESET}"
+        echo -e "${C_RED}Failed to stop '$app_name'. Check log for details.${C_RESET}"
     fi
 }
 
@@ -888,7 +900,7 @@ _update_app_task() {
                     echo "$pull_output" >> "${LOG_FILE:-/dev/null}"
                     
                     if [ "$pull_exit_code" -ne 0 ]; then
-                        log "ERROR: Failed to pull image $image" "${C_LIGHT_RED}Failed to pull ${image}. See log for details.${C_RESET}"
+                        log "ERROR: Failed to pull image $image" "${C_RED}Failed to pull ${image}. See log for details.${C_RESET}"
                         all_pulls_succeeded=false
                         continue
                     fi
@@ -934,7 +946,7 @@ _update_app_task() {
         fi
     else
         log "ERROR: Failed to pull images for '$app_name'. Aborting."
-        echo -e "${C_LIGHT_RED}Update for '$app_name' aborted due to pull failures.${C_RESET}"
+        echo -e "${C_RED}Update for '$app_name' aborted due to pull failures.${C_RESET}"
     fi
 }
 
@@ -996,7 +1008,7 @@ _rollback_app_task() {
         local selected_line="${valid_choices[$((choice-1))]}"
         IFS='|' read -r r_time r_name r_id <<< "$selected_line"
 
-        echo -e "\n${C_LIGHT_RED}WARNING: This will force '${r_name}' to point to ID '${r_id:7:12}' locally.${C_RESET}"
+        echo -e "\n${C_RED}WARNING: This will force '${r_name}' to point to ID '${r_id:7:12}' locally.${C_RESET}"
         read -p "Are you sure? (y/N): " confirm
         if [[ "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then
             log "Rolling back $app_name image $r_name to $r_id..."
@@ -1007,7 +1019,7 @@ _rollback_app_task() {
                 _stop_app_task "$app_name" "$app_dir"
                 _start_app_task "$app_name" "$app_dir" "--force-recreate"
                 
-                echo -e "\n${C_GREEN}${TICKMARK} Rollback complete.${C_RESET}"
+                echo -e "\n${TICKMARK} ${C_GREEN}Rollback complete.${C_RESET}"
                 log "Rollback successful for $r_name."
             else
                 echo -e "${C_RED}Error: Failed to retag image.${C_RESET}"
@@ -1031,10 +1043,10 @@ app_manager_status() {
             [[ -n "$proj" ]] && running_projects["$proj"]=1
         done < <($SUDO_CMD docker compose ls --quiet)
 
-        echo -e "${C_RESET}=============================================="
-        echo -e "${C_RESET} ${C_GREEN}App Status Overview ${C_RESET}"
-        echo -e "${C_RESET}==============================================\n"
-        echo -e "${C_RESET} --- ${C_YELLOW}Essential Apps (${C_CYAN}${APPS_BASE_PATH}${C_YELLOW}) ${C_RESET}---"
+        echo "=============================================="
+        echo -e "${C_GREEN}${T_BOLD}App Status Overview ${C_RESET}"
+        echo "=============================================="
+        echo -e "\n${C_RESET} --- ${C_YELLOW}Essential Apps (${C_CYAN}${APPS_BASE_PATH}${C_YELLOW}) ${C_RESET}---"
         local -a essential_apps; discover_apps "$APPS_BASE_PATH" essential_apps
         for app in "${essential_apps[@]}"; do
             if [ "$app" != "$MANAGED_SUBDIR" ]; then
@@ -1053,7 +1065,8 @@ app_manager_status() {
                 if [[ -v running_projects[$app] ]]; then echo -e " ${C_GREEN}[RUNNING]${C_RESET}\t$app"; else echo -e " ${C_RED}[STOPPED]${C_RESET}\t$app"; fi
             done
         fi
-        echo -e "\n===================================================="
+        echo -e "${C_RESET}"
+        echo "===================================================="
     ) | less -RX --prompt="$less_prompt"
 }
 
@@ -1244,7 +1257,7 @@ app_manager_menu() {
             2) app_manager_interactive_handler "Essential" "$APPS_BASE_PATH" "$APPS_BASE_PATH" ;;
             3) app_manager_interactive_handler "Managed" "$APPS_BASE_PATH/$MANAGED_SUBDIR" "$APPS_BASE_PATH/$MANAGED_SUBDIR" ;;
             4) 
-                read -rp "$(printf "\n${C_LIGHT_RED}This will stop ALL running compose applications. Are you sure? ${C_RESET}[${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}]: ${C_RESET}")" confirm
+                read -rp "$(printf "\n${C_RED}This will stop ALL running compose applications. Are you sure? ${C_RESET}[${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}]: ${C_RESET}")" confirm
                 if [[ "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then
                     app_manager_stop_all
                 else
@@ -1332,9 +1345,9 @@ volume_checker_explore() {
     local short_name="${volume_name:0:12}"
 
     clear
-    echo -e "${C_RESET}=============================================="
-    echo -e "          ${C_GREEN}Docker Tool Suite ${SCRIPT_VERSION}"
-    echo -e "${C_RESET}=============================================="
+    echo "=============================================="
+    echo -e "          ${C_GREEN}${T_BOLD}Docker Tool Suite ${SCRIPT_VERSION}${C_RESET}"
+    echo "=============================================="
     echo -e "${C_CYAN}           --- Interactive Shell ---${C_RESET}"
     echo -e "${C_RESET}----------------------------------------------\n"
     echo -e "${C_YELLOW}The volume ${C_CYAN}${volume_name} ${C_YELLOW}is mounted read-write at ${C_CYAN}/volume${C_YELLOW}."
@@ -1368,7 +1381,7 @@ volume_checker_menu() {
             "${C_YELLOW}List volume files${C_RESET}"
             "${C_YELLOW}Calculate volume size${C_RESET}"
             "${C_CYAN}Explore volume in shell${C_RESET}"
-            "${C_LIGHT_RED}Remove volume${C_RESET}"
+            "${C_RED}Remove volume${C_RESET}"
             "${C_GRAY}Return to volume list${C_RESET}"
             "${C_RED}Quit${C_RESET}"
         )
@@ -1389,7 +1402,7 @@ volume_checker_menu() {
                 "${C_CYAN}Explore volume in shell${C_RESET}") 
                     ensure_explore_image || break
                     volume_checker_explore "${volume_name}"; break ;;
-                "${C_LIGHT_RED}Remove volume${C_RESET}") if volume_checker_remove "${volume_name}"; then return; fi; break ;;
+                "${C_RED}Remove volume${C_RESET}") if volume_checker_remove "${volume_name}"; then return; fi; break ;;
                 "${C_GRAY}Return to volume list${C_RESET}") return ;;
                 "${C_RED}Quit${C_RESET}") exit 0 ;;
                 *) echo -e "${C_RED}Invalid option '$REPLY'${C_RESET}"; sleep 1; break ;;
@@ -1401,9 +1414,9 @@ volume_checker_menu() {
 volume_checker_main() {
     while true; do
         clear
-        echo -e "${C_RESET}=============================================="
-        echo -e "          ${C_GREEN}Docker Tool Suite ${SCRIPT_VERSION}"
-        echo -e "${C_RESET}=============================================="
+        echo "=============================================="
+        echo -e "          ${C_GREEN}${T_BOLD}Docker Tool Suite ${SCRIPT_VERSION}${C_RESET}"
+        echo "=============================================="
         echo -e "           ${C_CYAN}--- Inspect & Manage Volumes ---"
         echo -e "${C_RESET}----------------------------------------------\n"
         mapfile -t volumes < <($SUDO_CMD docker volume ls --format "{{.Name}}")
@@ -1541,7 +1554,7 @@ volume_smart_backup_main() {
 
     echo -e "\n${C_YELLOW}Changing ownership to '${CURRENT_USER}'...${C_RESET}"
     $SUDO_CMD chown -R "${CURRENT_USER}:${CURRENT_USER}" "$backup_dir"
-    echo -e "\n${C_GREEN}${TICKMARK} Backup tasks completed successfully!${C_RESET}"
+    echo -e "\n${TICKMARK} ${C_GREEN}Backup tasks completed successfully!${C_RESET}"
 
     local create_archive=""
     while true; do
@@ -1576,7 +1589,7 @@ volume_smart_backup_main() {
                 u|U|use|USE)
                     archive_password=$(decrypt_pass "${ENCRYPTED_ARCHIVE_PASSWORD}")
                     if [[ -z "$archive_password" ]]; then
-                        echo -e "${C_LIGHT_RED}Error: Decryption failed. Please enter manually.${C_RESET}"
+                        echo -e "${C_RED}Error: Decryption failed. Please enter manually.${C_RESET}"
                     else
                         echo -e "${C_CYAN}Using saved password.${C_RESET}"
                         password_is_set=true
@@ -1725,7 +1738,7 @@ volume_smart_backup_main() {
         elif [[ "$line" =~ (Adding|Updating|Creating) ]]; then
             echo -e "${C_CYAN}${line}${C_RESET}"
         elif [[ "$line" =~ (Error|WARNING|Cannot) ]]; then
-            echo -e "${C_LIGHT_RED}${line}${C_RESET}"
+            echo -e "${C_RED}${line}${C_RESET}"
         elif [[ "$line" =~ [0-9]+% ]]; then
             echo -e "${line//%/%${C_RESET}}" 
         else
@@ -1778,7 +1791,7 @@ volume_smart_backup_main() {
     if $verify_success; then
          echo -e "${C_GREEN}Verification Passed: Archive is healthy.${C_RESET}\n"
     else
-         echo -e "${C_LIGHT_RED}Verification FAILED! Do not delete the source files.${C_RESET}\n"
+         echo -e "${C_RED}Verification FAILED! Do not delete the source files.${C_RESET}\n"
          return 1
     fi
     
@@ -1802,7 +1815,7 @@ volume_smart_backup_main() {
             esac
         done
     else
-        echo -e "\n${C_LIGHT_RED}Error: Failed to create 7z archive.${C_RESET}"
+        echo -e "\n${C_RED}Error: Failed to create 7z archive.${C_RESET}"
     fi
 }
 
@@ -1847,7 +1860,7 @@ volume_restore_main() {
         echo "   -> Importing data..."
         local tar_opts="-xvf"; [[ "$base_name" == *.zst ]] && tar_opts="--zstd -xvf"
         execute_and_log $SUDO_CMD docker run --rm -v "${volume_name}:/target" -v "$(dirname "$backup_file"):/backup" "${BACKUP_IMAGE}" tar -C /target ${tar_opts} "/backup/${base_name}"
-        echo -e "   ${C_GREEN}${TICKMARK} Restore for volume ${volume_name} completed.${C_RESET}"
+        echo -e "   ${TICKMARK} ${C_GREEN}Restore for volume ${C_CYAN}${volume_name} ${C_GREEN}completed.${C_RESET}"
     done
     echo -e "\n${C_GREEN}All selected restore tasks finished.${C_RESET}"
 }
@@ -1889,12 +1902,12 @@ system_prune_main() {
     echo "  - all dangling images"
     echo "  - all build cache"
     echo ""
-    read -rp "$(printf "${C_LIGHT_RED}This action is IRREVERSIBLE. Are you sure? ${C_RESET}[${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}]: ${C_RESET}")" confirm
+    read -rp "$(printf "${C_RED}This action is IRREVERSIBLE. Are you sure? ${C_RESET}[${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}]: ${C_RESET}")" confirm
     if [[ "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then
         echo -e "\n${C_YELLOW}Pruning system...${C_RESET}"
         log "Running Docker System Prune..."
         execute_and_log $SUDO_CMD docker system prune -af
-        echo -e "\n${C_GREEN}${TICKMARK} System prune complete.${C_RESET}"
+        echo -e "\n${TICKMARK} ${C_GREEN}System prune complete.${C_RESET}"
     else
         echo -e "\n${C_RED}Prune canceled.${C_RESET}"
     fi
@@ -1923,9 +1936,9 @@ _log_viewer_select_and_view() {
         fi
 
         clear
-        echo -e "${C_RESET}=============================================="
-        echo -e "          ${C_GREEN}Docker Tool Suite ${SCRIPT_VERSION}"
-        echo -e "${C_RESET}=============================================="
+        echo "=============================================="
+        echo -e "          ${C_GREEN}${T_BOLD}Docker Tool Suite ${SCRIPT_VERSION}${C_RESET}"
+        echo "=============================================="
         echo -e "           ${C_CYAN}--- Log Viewer ---"
         echo -e "${C_RESET}----------------------------------------------\n"
         echo -e "${C_YELLOW}Select a log file to view:${C_RESET}"
@@ -1971,7 +1984,7 @@ log_remover_main() {
     for i in "${!log_files[@]}"; do if ${selected_status[$i]}; then files_to_delete+=("${log_files[$i]}"); fi; done
     if [ ${#files_to_delete[@]} -eq 0 ]; then echo -e "\n${C_YELLOW}No logs selected.${C_RESET}"; sleep 1; return; fi
 
-    echo -e "\n${C_LIGHT_RED}You are about to permanently delete ${#files_to_delete[@]} log file(s).${C_RESET}"
+    echo -e "\n${C_RED}You are about to permanently delete ${#files_to_delete[@]} log file(s).${C_RESET}"
     read -p "${C_YELLOW}Are you sure? [${C_RESET}Y${C_YELLOW}/${C_RESET}N${C_YELLOW}]: ${C_RESET}" confirm
     if [[ ! "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then echo -e "${C_RED}Deletion canceled.${C_RESET}"; sleep 1; return; fi
     
@@ -2019,9 +2032,9 @@ archive_settings_menu() {
     
     while true; do
         clear
-        echo -e "${C_RESET}=============================================="
-        echo -e " ${C_GREEN}Archive Settings Manager"
-        echo -e "${C_RESET}=============================================="
+        echo "=============================================="
+        echo -e " ${C_GREEN}${T_BOLD}Archive Settings Manager${C_RESET}"
+        echo "=============================================="
         echo -e " ${C_YELLOW}Current Settings:${C_RESET}"
         echo -e " Compression Level: ${C_CYAN}${ARCHIVE_COMPRESSION_LEVEL} ${C_GRAY}(0-9)${C_RESET}"
         if [[ -n "${ENCRYPTED_ARCHIVE_PASSWORD}" ]]; then
@@ -2112,9 +2125,9 @@ update_secure_archive_settings() {
     load_config "$CONFIG_FILE"
 
     if [[ -z "$ENCRYPTED_ARCHIVE_PASSWORD" ]]; then
-        echo -e "${C_GREEN}${TICKMARK} Default archive password has been removed.${C_RESET}"
+        echo -e "${TICKMARK} ${C_YELLOW}Default archive password has been removed.${C_RESET}"
     else
-        echo -e "${C_GREEN}${TICKMARK} Archive password updated successfully.${C_RESET}"
+        echo -e "${TICKMARK} ${C_GREEN}Archive password updated successfully.${C_RESET}"
     fi
 }
 
@@ -2233,7 +2246,7 @@ _add_cron_task() {
     
     echo -e "${C_YELLOW}Adding new schedule for $task_name...${C_RESET}"
     printf "%s\n%s\n%s\n" "$current_crontab" "$comment" "$cron_schedule $full_command" | $SUDO_CMD crontab -
-    echo -e "${C_GREEN}${TICKMARK} Task scheduled successfully: ${C_CYAN}[$cron_schedule]${C_RESET}"
+    echo -e "${TICKMARK} ${C_GREEN}Task scheduled successfully: ${C_CYAN}[$cron_schedule]${C_RESET}"
     log "Scheduled $task_name at '$cron_schedule'"
 }
 
@@ -2376,7 +2389,7 @@ scheduler_menu() {
 _check_single_image_health() {
     local img=$1
     local output_res
-    output_res=$($SUDO_CMD docker inspect --format '{{if .Config.Healthcheck}}'${TICKMARK}' YES{{else}}'${C_RED}'X NO{{end}}' "$img" 2>/dev/null)
+    output_res=$($SUDO_CMD docker inspect --format '{{if .Config.Healthcheck}}'${TICKMARK}' '${C_GREEN}'YES{{else}}'${C_RED}'X NO{{end}}' "$img" 2>/dev/null)
 
     if [ -z "$output_res" ]; then
         printf "%-55s %b\n" "$img" "${C_RED}Not found locally.${C_RESET}"
@@ -2399,9 +2412,9 @@ image_healthcheck_main() {
 
         case "$choice" in
             1)
-                echo -e "\n${C_YELLOW}Checking all local images...${C_RESET}"
+                echo -e "\n${C_YELLOW}Checking all local images for built-in healthcheck...${C_RESET}"
                 echo "------------------------------------------------------------"
-                printf "%-55s %s\n" "${C_CYAN}IMAGE NAME" "HEALTHCHECK${C_RESET}"
+                printf "%-53s %s\n" "${C_CYAN}IMAGE NAME" "HEALTHCHECK${C_RESET}"
                 $SUDO_CMD docker image ls --format "{{.Repository}}:{{.Tag}}" | grep -v "<none>" | while read -r img; do
                     _check_single_image_health "$img"
                 done
@@ -2620,7 +2633,7 @@ _update_config_value() {
     fi
     
     chmod 600 "$CONFIG_FILE"
-    echo -e "${C_GREEN}${TICKMARK} Setting '${key}' updated.${C_RESET}"
+    echo -e "${TICKMARK} ${C_GREEN}Setting ${C_CYAN}'${key}' ${C_GREEN}updated.${C_RESET}"
     load_config "$CONFIG_FILE"
 }
 
@@ -2693,7 +2706,7 @@ update_ignored_items() {
     mv "$temp_file" "$CONFIG_FILE"
     chmod 600 "$CONFIG_FILE"
 
-    echo -e "${C_GREEN}${TICKMARK} Ignored ${item_type,,} list updated successfully.${C_RESET}"
+    echo -e "${TICKMARK} ${C_GREEN}Ignored ${C_CYAN}${item_type,,} ${C_GREEN}list updated successfully.${C_RESET}"
     load_config "$CONFIG_FILE"
 }
 
@@ -2796,10 +2809,10 @@ if [[ $# -gt 0 ]]; then
 
     case "$1" in
         --help|-h)
-            echo -e "${C_RESET}=============================================="
-            echo -e " ${C_GREEN}Docker Tool Suite ${C_CYAN}${SCRIPT_VERSION}${C_RESET} - Help Menu"
-            echo -e "${C_RESET}==============================================\n"
-            echo -e " ${C_YELLOW}Description:${C_RESET}"
+            echo "=============================================="
+            echo -e " ${C_GREEN}${T_BOLD}Docker Tool Suite ${C_CYAN}${SCRIPT_VERSION}${C_GREEN}${T_BOLD} - Help Menu${C_RESET}"
+            echo "=============================================="
+            echo -e "\n ${C_YELLOW}Description:${C_RESET}"
             echo -e "   A self-hosted CLI tool to manage Docker Compose stacks,"
             echo -e "   volumes, backups, logs, and automated updates."
             echo
@@ -2816,7 +2829,8 @@ if [[ $# -gt 0 ]]; then
             echo -e " ${C_YELLOW}Options (for updates):${C_RESET}"
             echo -e "   ${C_GREEN}--cron${C_RESET}          Optimized for scheduled tasks."
             echo -e "   ${C_GREEN}--dry-run${C_RESET}       Simulate actions without making changes."
-            echo -e "${C_RESET}==============================================${C_RESET}\n"
+            echo "=============================================="
+            echo
             exit 0 ;;
     esac
 
