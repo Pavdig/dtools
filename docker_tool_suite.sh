@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.5.0.1
+SCRIPT_VERSION=v1.5.0.2
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -1009,7 +1009,7 @@ _rollback_app_task() {
         IFS='|' read -r r_time r_name r_id <<< "$selected_line"
 
         echo -e "\n${C_RED}WARNING: This will force '${r_name}' to point to ID '${r_id:7:12}' locally.${C_RESET}"
-        read -p "Are you sure? (y/N): " confirm
+        read -p "Are you sure? ${C_RESET}(${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}): " confirm
         if [[ "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then
             log "Rolling back $app_name image $r_name to $r_id..."
             
@@ -1282,16 +1282,20 @@ ensure_backup_image() {
                 return 1
             fi
         else
-            echo -e "${C_YELLOW}The required helper image (${C_CYAN}${BACKUP_IMAGE}${C_YELLOW}) is missing.${C_RESET}"
-            read -p "Download it now? (y/N): " confirm_dl
+            echo -e "${C_YELLOW}The required helper image (${C_CYAN}${BACKUP_IMAGE}${C_YELLOW}) is missing.${C_RESET}\n"
+            read -p "${C_RESET}Download it now? (${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}): " confirm_dl
             if [[ "${confirm_dl,,}" =~ ^(y|Y|yes|YES)$ ]]; then
-                echo -e "-> Pulling image..."
+                echo -e "${C_CYAN}-> Pulling image...${C_RESET}"
                 if ! execute_and_log $SUDO_CMD docker pull "${BACKUP_IMAGE}"; then 
-                    echo -e "${C_RED}Error: Failed to pull image.${C_RESET}"
+                    echo -e "\n${C_RED}Error: Failed to pull image.${C_RESET}"
+                    echo -e "${C_GRAY}Check helper image name or internet connection.${C_RESET}"
+                    sleep 2
                     return 1
+                    
                 fi
             else
-                echo -e "${C_RED}Operation canceled. Function requires this image.${C_RESET}"
+                echo -e "\n${C_RED}Operation canceled. Function requires this image.${C_RESET}"
+                sleep 2
                 return 1
             fi
         fi
@@ -1306,15 +1310,16 @@ ensure_explore_image() {
              if ! execute_and_log $SUDO_CMD docker pull "${EXPLORE_IMAGE}"; then return 1; fi
         else
             echo -e "${C_YELLOW}The required explorer image (${C_CYAN}${EXPLORE_IMAGE}${C_YELLOW}) is missing.${C_RESET}"
-            read -p "Download it now? (y/N): " confirm_dl
+            read -p "Download it now? ${C_RESET}(${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}): " confirm_dl
             if [[ "${confirm_dl,,}" =~ ^(y|Y|yes|YES)$ ]]; then
-                echo -e "-> Pulling image..."
+                echo -e "${C_CYAN}-> Pulling image...${C_RESET}"
                 if ! execute_and_log $SUDO_CMD docker pull "${EXPLORE_IMAGE}"; then 
                     echo -e "${C_RED}Error: Failed to pull image.${C_RESET}"
                     return 1
                 fi
             else
                 echo -e "${C_RED}Operation canceled. Function requires this image.${C_RESET}"
+                sleep 2
                 return 1
             fi
         fi
@@ -1378,33 +1383,34 @@ volume_checker_menu() {
     clear; volume_checker_inspect "${volume_name}"
     while true; do
         local options=(
-            "${C_YELLOW}List volume files${C_RESET}"
-            "${C_YELLOW}Calculate volume size${C_RESET}"
+            "${C_CYAN}List volume files${C_RESET}"
+            "${C_CYAN}Calculate volume size${C_RESET}"
             "${C_CYAN}Explore volume in shell${C_RESET}"
             "${C_RED}Remove volume${C_RESET}"
-            "${C_GRAY}Return to volume list${C_RESET}"
-            "${C_RED}Quit${C_RESET}"
+            "${C_GREEN}Return to volume list${C_RESET}"
+            "${C_GRAY}Quit${C_RESET}"
         )
-        PS3=$'\n'"${C_YELLOW}Enter action number: ${C_RESET}"; select action in "${options[@]}"; do
+        echo -e "\n${C_YELLOW}Options:${C_RESET}"
+        PS3=$'\n'"${C_YELLOW}Enter option ${C_RESET}number: "; select action in "${options[@]}"; do
             case "$action" in
-                "${C_YELLOW}List volume files${C_RESET}")
+                "${C_CYAN}List volume files${C_RESET}")
                     ensure_backup_image || break
                     volume_checker_list_files "${volume_name}"
-                    echo -e "\n${C_CYAN}Action complete. Press Enter to return to menu...${C_RESET}"; read -r
+                    echo -e "${C_CYAN}---\nAction complete.\n\n${C_RESET}Press Enter to return to menu..."; read -r
                     break
                     ;;
-                "${C_YELLOW}Calculate volume size${C_RESET}")
+                "${C_CYAN}Calculate volume size${C_RESET}")
                     ensure_backup_image || break
                     volume_checker_calculate_size "${volume_name}"
-                    echo -e "\n${C_CYAN}Action complete. Press Enter to return to menu...${C_RESET}"; read -r
+                    echo -e "${C_CYAN}---\nAction complete.\n\n${C_RESET}Press Enter to return to menu..."; read -r
                     break
                     ;;
                 "${C_CYAN}Explore volume in shell${C_RESET}") 
                     ensure_explore_image || break
                     volume_checker_explore "${volume_name}"; break ;;
                 "${C_RED}Remove volume${C_RESET}") if volume_checker_remove "${volume_name}"; then return; fi; break ;;
-                "${C_GRAY}Return to volume list${C_RESET}") return ;;
-                "${C_RED}Quit${C_RESET}") exit 0 ;;
+                "${C_GREEN}Return to volume list${C_RESET}") return ;;
+                "${C_GRAY}Quit${C_RESET}") exit 0 ;;
                 *) echo -e "${C_RED}Invalid option '$REPLY'${C_RESET}"; sleep 1; break ;;
             esac
         done
@@ -1460,7 +1466,7 @@ volume_smart_backup_main() {
     clear; echo -e "${C_GREEN}Starting Smart Docker Volume Backup...${C_RESET}"
     log "--- Starting Smart Volume Backup Session ---"
 
-    ensure_backup_image || return
+    ensure_backup_image || volume_manager_menu
 
     mapfile -t all_volumes < <($SUDO_CMD docker volume ls --format "{{.Name}}"); local -a filtered_volumes=()
     for volume in "${all_volumes[@]}"; do if [[ ! " ${IGNORED_VOLUMES[*]-} " =~ " ${volume} " ]]; then filtered_volumes+=("$volume"); fi; done
@@ -1841,7 +1847,7 @@ volume_restore_main() {
         return
     fi
     
-    echo -e "\n${C_RED}This will OVERWRITE existing data in corresponding volumes!${C_RESET}"; read -p "Are you sure? (y/N): " confirm
+    echo -e "\n${C_RED}This will OVERWRITE existing data in corresponding volumes!${C_RESET}"; read -p "Are you sure? ${C_RESET}(${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}): " confirm
     if [[ ! "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then echo -e "${C_RED}Restore canceled.${C_RESET}"; return; fi
     
     for backup_file in "${selected_files[@]}"; do
