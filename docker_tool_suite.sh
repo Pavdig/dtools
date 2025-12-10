@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.5.0.2
+SCRIPT_VERSION=v1.5.0.3
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -49,6 +49,11 @@ else
     CURRENT_USER="${USER:-$(whoami)}"
 fi
 SCRIPT_PATH=$(readlink -f "$0")
+
+# --- Safety: Force Safe Working Directory ---
+# Unconditionally switch to HOME or Root to prevent "getwd" errors
+# if the original launch directory is deleted while the script is running.
+cd "${HOME:-/}" 2>/dev/null || cd "/"
 
 # --- Command Prefix for Sudo ---
 SUDO_CMD=""
