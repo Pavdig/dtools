@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.5.0.3
+SCRIPT_VERSION=v1.5.0.4
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -219,6 +219,10 @@ _enable_cron_logging() {
         fi
     fi
 
+    # Disable colors for cron logs
+    C_RED=""; C_GREEN=""; C_YELLOW=""; C_CYAN=""; T_BOLD=""; C_GRAY=""; C_RESET=""
+    TICKMARK="[OK]"
+
     LOG_FILE="$new_log_file"
 
     exec > >(while IFS= read -r line || [ -n "$line" ]; do echo "[$(date +'%Y-%m-%d %H:%M:%S')] $line"; done >> "$new_log_file") 2>&1
@@ -226,7 +230,7 @@ _enable_cron_logging() {
     if [[ -n "${SUDO_USER-}" ]]; then
         trap "chown '${SUDO_USER}:${SUDO_USER}' '$new_log_file'" EXIT
     fi
-    echo -e "${C_YELLOW} Cron logging enabled. Output redirected to: ${C_GREEN}$new_log_file ${C_RESET}"
+    echo -e "Cron logging enabled. Output redirected to: $new_log_file"
 }
 
 check_root() {
@@ -2192,12 +2196,9 @@ update_unused_images_main() {
     if [ ${#images_to_update[@]} -gt 0 ]; then
         log "Found ${#images_to_update[@]} unused images to update. Starting parallel pulls..." "${C_CYAN}Found ${#images_to_update[@]} images to update. Pulling...${C_RESET}"
         for image in "${images_to_update[@]}"; do
-            (
-                log "Updating unused image: $image"
-                execute_and_log $SUDO_CMD docker pull "$image"
-            ) &
+            log "Updating unused image: $image"
+            execute_and_log $SUDO_CMD docker pull "$image"
         done
-        wait
         log "All image updates are complete." "${C_GREEN}All image pulls are complete.${C_RESET}"
     else
         log "No unused images found to update." "${C_YELLOW}No unused images found to update.${C_RESET}"
@@ -2213,7 +2214,13 @@ update_unused_images_main() {
     echo "  Images skipped (in use): ${C_YELLOW}$used_count${C_RESET}"
     echo "  Images skipped (on ignore list): ${C_YELLOW}$ignored_count${C_RESET}"
     echo "  Images skipped (un-pullable): ${C_YELLOW}$unpullable_count${C_RESET}"
-    log "--- Update Summary ---"; log "Total images scanned: $total_images_scanned"; log "Images updated/to be updated: $updated_count"; log "Images skipped (in use): $used_count"; log "Images skipped (on ignore list): $ignored_count"; log "Images skipped (un-pullable): $unpullable_count"; log "Script finished."
+    log "--- Update Summary ---"
+    log "Total images scanned: $total_images_scanned"
+    log "Images updated/to be updated: $updated_count"
+    log "Images skipped (in use): $used_count"
+    log "Images skipped (on ignore list): $ignored_count"
+    log "Images skipped (un-pullable): $unpullable_count"
+    log "Script finished."
 }
 
 # --- Advanced Cron Scheduler ---
