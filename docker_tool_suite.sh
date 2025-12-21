@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.5.0.4
+SCRIPT_VERSION=v1.5.0.5
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -29,7 +29,7 @@ else
     C_RESET=""
 fi
 
-TICKMARK="${C_GREEN}\xE2\x9C\x93${C_RESET}"
+TICKMARK=$'\xE2\x9C\x93'
 
 
 # --- Standardized Footer Options ---
@@ -430,7 +430,7 @@ configure_shell_alias() {
             echo "$new_alias_line" >> "$temp_rc"
             mv "$temp_rc" "$shell_rc"
             chown "${CURRENT_USER}:${CURRENT_USER}" "$shell_rc"
-            echo -e "\n${TICKMARK} Alias '${alias_name}' added to ${shell_rc}!${C_RESET}"
+            echo -e "\n${C_GREEN}${TICKMARK} Alias '${C_CYAN}${alias_name}${C_GREEN}' added to ${C_CYAN}${shell_rc}${C_GREEN}!${C_RESET}"
             echo -e "${C_GRAY}NOTE: Run 'source ${shell_rc}' or restart your terminal to use it.${C_RESET}"
             ;;
         2)
@@ -445,7 +445,7 @@ configure_shell_alias() {
             mv "$temp_rc" "$shell_rc"
             
             chown "${CURRENT_USER}:${CURRENT_USER}" "$shell_rc"
-            echo -e "${TICKMARK} ${C_GREEN}Alias removed successfully.${C_RESET}"
+            echo -e "${C_GREEN}${TICKMARK} Alias removed successfully.${C_RESET}"
             ;;
         *) return ;;
     esac
@@ -568,7 +568,7 @@ initial_setup() {
             echo -e "${C_CYAN}Updating package lists and installing...${C_RESET}"
             $SUDO_CMD apt-get update
             $SUDO_CMD apt-get install -y "${packages_to_install[@]}"
-            echo -e "${TICKMARK} ${C_GREEN}Dependencies installed successfully.${C_RESET}"
+            echo -e "${C_GREEN}${TICKMARK} Dependencies installed successfully.${C_RESET}"
         else
             echo -e "${C_RED}Warning: Script may fail without these dependencies.${C_RESET}"
             sleep 2
@@ -774,7 +774,7 @@ initial_setup() {
         configure_shell_alias
     fi
 
-    echo -e "\n${TICKMARK} ${C_GREEN}Setup complete! The script will now continue.${C_RESET}\n"; sleep 2
+    echo -e "\n${C_GREEN}${TICKMARK} Setup complete! The script will now continue.${C_RESET}\n"; sleep 2
 }
 
 validate_and_edit_compose() {
@@ -1028,7 +1028,7 @@ _rollback_app_task() {
                 _stop_app_task "$app_name" "$app_dir"
                 _start_app_task "$app_name" "$app_dir" "--force-recreate"
                 
-                echo -e "\n${TICKMARK} ${C_GREEN}Rollback complete.${C_RESET}"
+                echo -e "\n${C_GREEN}${TICKMARK} Rollback complete.${C_RESET}"
                 log "Rollback successful for $r_name."
             else
                 echo -e "${C_RED}Error: Failed to retag image.${C_RESET}"
@@ -1569,7 +1569,7 @@ volume_smart_backup_main() {
 
     echo -e "\n${C_YELLOW}Changing ownership to '${CURRENT_USER}'...${C_RESET}"
     $SUDO_CMD chown -R "${CURRENT_USER}:${CURRENT_USER}" "$backup_dir"
-    echo -e "\n${TICKMARK} ${C_GREEN}Backup tasks completed successfully!${C_RESET}"
+    echo -e "\n${C_GREEN}${TICKMARK} Backup tasks completed successfully!${C_RESET}"
 
     local create_archive=""
     while true; do
@@ -1875,7 +1875,7 @@ volume_restore_main() {
         echo "   -> Importing data..."
         local tar_opts="-xvf"; [[ "$base_name" == *.zst ]] && tar_opts="--zstd -xvf"
         execute_and_log $SUDO_CMD docker run --rm -v "${volume_name}:/target" -v "$(dirname "$backup_file"):/backup" "${BACKUP_IMAGE}" tar -C /target ${tar_opts} "/backup/${base_name}"
-        echo -e "   ${TICKMARK} ${C_GREEN}Restore for volume ${C_CYAN}${volume_name} ${C_GREEN}completed.${C_RESET}"
+        echo -e "   ${C_GREEN}${TICKMARK} Restore for volume ${C_CYAN}${volume_name} ${C_GREEN}completed.${C_RESET}"
     done
     echo -e "\n${C_GREEN}All selected restore tasks finished.${C_RESET}"
 }
@@ -1922,7 +1922,7 @@ system_prune_main() {
         echo -e "\n${C_YELLOW}Pruning system...${C_RESET}"
         log "Running Docker System Prune..."
         execute_and_log $SUDO_CMD docker system prune -af
-        echo -e "\n${TICKMARK} ${C_GREEN}System prune complete.${C_RESET}"
+        echo -e "\n${C_GREEN}${TICKMARK} System prune complete.${C_RESET}"
     else
         echo -e "\n${C_RED}Prune canceled.${C_RESET}"
     fi
@@ -2140,9 +2140,9 @@ update_secure_archive_settings() {
     load_config "$CONFIG_FILE"
 
     if [[ -z "$ENCRYPTED_ARCHIVE_PASSWORD" ]]; then
-        echo -e "${TICKMARK} ${C_YELLOW}Default archive password has been removed.${C_RESET}"
+        echo -e "${C_GREEN}${TICKMARK} ${C_YELLOW}Default archive password has been removed.${C_RESET}"
     else
-        echo -e "${TICKMARK} ${C_GREEN}Archive password updated successfully.${C_RESET}"
+        echo -e "${C_GREEN}${TICKMARK} ${C_YELLOW}Archive password updated successfully.${C_RESET}"
     fi
 }
 
@@ -2264,7 +2264,7 @@ _add_cron_task() {
     
     echo -e "${C_YELLOW}Adding new schedule for $task_name...${C_RESET}"
     printf "%s\n%s\n%s\n" "$current_crontab" "$comment" "$cron_schedule $full_command" | $SUDO_CMD crontab -
-    echo -e "${TICKMARK} ${C_GREEN}Task scheduled successfully: ${C_CYAN}[$cron_schedule]${C_RESET}"
+    echo -e "${C_GREEN}${TICKMARK} Task scheduled successfully: ${C_CYAN}[$cron_schedule]${C_RESET}"
     log "Scheduled $task_name at '$cron_schedule'"
 }
 
@@ -2373,7 +2373,7 @@ scheduler_menu() {
         if [[ -n "$current_sched" ]]; then
             echo -e "1) ${C_GREEN}Update Schedule${C_RESET}"
             echo -e "2) ${C_RED}Remove Task${C_RESET}"
-            echo -e "3) ${C_GRAY}Cancel{C_RESET}\n${C_RESET}"
+            echo -e "3) ${C_GRAY}Cancel${C_RESET}\n${C_RESET}"
             read -p "Choice: " sub_choice
             case "$sub_choice" in
                 1) 
@@ -2407,8 +2407,7 @@ scheduler_menu() {
 _check_single_image_health() {
     local img=$1
     local output_res
-    output_res=$($SUDO_CMD docker inspect --format '{{if .Config.Healthcheck}}'${TICKMARK}' '${C_GREEN}'YES{{else}}'${C_RED}'X NO{{end}}' "$img" 2>/dev/null)
-
+    output_res=$($SUDO_CMD docker inspect --format "{{if .Config.Healthcheck}}${C_GREEN}${TICKMARK} YES${C_RESET}{{else}}${C_RED}X NO${C_RESET}{{end}}" "$img" 2>/dev/null)
     if [ -z "$output_res" ]; then
         printf "%-55s %b\n" "$img" "${C_RED}Not found locally.${C_RESET}"
     else
@@ -2452,10 +2451,12 @@ image_healthcheck_main() {
                 select img_choice in "${local_images[@]}"; do
                     if [[ "$REPLY" == "q" || "$REPLY" == "Q" ]]; then break; fi
                     if [[ -n "$img_choice" ]]; then
-                        echo "------------------------------------------------------------"
+                        echo
+                        echo "--------------------------------------------------------------"
                         printf "%-55s %s\n" "${C_CYAN}IMAGE NAME" "HEALTHCHECK${C_RESET}"
                         _check_single_image_health "$img_choice"
-                        echo "------------------------------------------------------------"
+                        echo "--------------------------------------------------------------"
+                        echo
                         break
                     else
                         echo -e "${C_RED}Invalid selection.${C_RESET}"
@@ -2651,7 +2652,7 @@ _update_config_value() {
     fi
     
     chmod 600 "$CONFIG_FILE"
-    echo -e "${TICKMARK} ${C_GREEN}Setting ${C_CYAN}'${key}' ${C_GREEN}updated.${C_RESET}"
+    echo -e "${C_GREEN}${TICKMARK} Setting '${C_CYAN}${key}${C_GREEN}' updated.${C_RESET}"
     load_config "$CONFIG_FILE"
 }
 
@@ -2724,7 +2725,7 @@ update_ignored_items() {
     mv "$temp_file" "$CONFIG_FILE"
     chmod 600 "$CONFIG_FILE"
 
-    echo -e "${TICKMARK} ${C_GREEN}Ignored ${C_CYAN}${item_type,,} ${C_GREEN}list updated successfully.${C_RESET}"
+    echo -e "${C_GREEN}${TICKMARK} Ignored ${C_CYAN}${item_type,,} ${C_GREEN}list updated successfully.${C_RESET}"
     load_config "$CONFIG_FILE"
 }
 
