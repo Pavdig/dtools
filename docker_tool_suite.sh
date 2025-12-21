@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.5.0.6
+SCRIPT_VERSION=v1.5.0.7
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -308,18 +308,20 @@ discover_apps() {
     local path="$1"; local -n app_array="$2"
     app_array=()
     if [ ! -d "$path" ]; then echo "Warning: Directory not found for discovery: $path" >> "${LOG_FILE:-/dev/null}"; return; fi
+    
     shopt -s nullglob
-
+    local -a temp_list=()
     for dir in "$path"/*/; do
         if [ -d "$dir" ]; then
             if find_compose_file "${dir%/}" &>/dev/null; then
-                app_array+=("$(basename "$dir")")
+                temp_list+=("$(basename "$dir")")
             fi
         fi
     done
-    
     shopt -u nullglob
-    IFS=$'\n' app_array=($(sort <<<"${app_array[*]}")); unset IFS
+
+    # Use mapfile to sort the array safely, even with spaces
+    mapfile -t app_array < <(printf "%s\n" "${temp_list[@]}" | sort)
 }
 
 show_selection_menu() {
@@ -511,10 +513,15 @@ _prompt_input() {
                 fi
                 ;;
             path)
-                if [[ ! "$output_var" =~ ^(/|~|\.) ]]; then
-                    echo -e "${C_RED}Error: Path must start with / (absolute), ~ (home), or . (relative).${C_RESET}"
+                if [[ "$output_var" == ~* ]]; then
+                    output_var="${output_var/#\~/$HOME}"
+                fi
+
+                if [[ ! "$output_var" =~ ^/ ]]; then
+                    echo -e "${C_RED}Error: Path must be absolute (start with / or ~).${C_RESET}"
                     valid=false
                 fi
+
                 if [[ "$output_var" =~ [\&\|\;\`\$] ]]; then
                      echo -e "${C_RED}Error: Path contains invalid shell characters.${C_RESET}"
                      valid=false
@@ -2195,11 +2202,11 @@ update_unused_images_main() {
     done < <($SUDO_CMD docker images --format '{{.ID}} {{.Repository}}:{{.Tag}}')
 
     if [ ${#images_to_update[@]} -gt 0 ]; then
-        log "Found ${#images_to_update[@]} unused images to update. Starting parallel pulls..." "${C_CYAN}Found ${#images_to_update[@]} images to update. Pulling...${C_RESET}"
-        for image in "${images_to_update[@]}"; do
-            log "Updating unused image: $image"
-            execute_and_log $SUDO_CMD docker pull "$image"
-        done
+        log "Found ${#images_to_update[@]} unused images to update. Starting parallel pulls..." "${C_CYAN}Found ${#images_to_update[@]} images to update. Pulling in parallel...${C_RESET}"
+        
+        # Parallel pull: -P 4 runs 4 downloads at once. 
+        # Output is redirected to log file.
+        printf "%s\n" "${images_to_update[@]}" | xargs -I {} -P 4 $SUDO_CMD docker pull {} >> "${LOG_FILE:-/dev/null}" 2>&1
         log "All image updates are complete." "${C_GREEN}All image pulls are complete.${C_RESET}"
     else
         log "No unused images found to update." "${C_YELLOW}No unused images found to update.${C_RESET}"
