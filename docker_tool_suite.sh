@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.5.0.5
+SCRIPT_VERSION=v1.5.0.6
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -19,6 +19,7 @@ if tput setaf 1 > /dev/null 2>&1; then
     T_BOLD=$(tput bold)
     C_GRAY=$(tput bold)$(tput setaf 0)
     C_RESET=$(tput sgr0)
+    TICKMARK=$'\xE2\x9C\x93'
 else
     C_RED=""
     C_GREEN=""
@@ -27,10 +28,8 @@ else
     T_BOLD=""
     C_GRAY=""
     C_RESET=""
+    TICKMARK="[OK]"
 fi
-
-TICKMARK=$'\xE2\x9C\x93'
-
 
 # --- Standardized Footer Options ---
 optionsRandQ=(
@@ -608,25 +607,6 @@ initial_setup() {
     
     _prompt_input "Backup Helper Image"   "$backup_image_def"  BACKUP_IMAGE  "text"
     _prompt_input "Volume Explorer Image" "$explore_image_def" EXPLORE_IMAGE "text"
-    
-    local log_sub_update_def="apps-update-logs"
-    local log_sub_unused_def="unused-images-update-logs"
-    
-    read -p "Subdirectory for App Update Logs [${C_GREEN}${log_sub_update_def}${C_RESET}]: " log_sub_update
-    LOG_SUBDIR_UPDATE=${log_sub_update:-$log_sub_update_def}
-    
-    read -p "Subdirectory for Unused Image Logs [${C_GREEN}${log_sub_unused_def}${C_RESET}]: " log_sub_unused
-    LOG_SUBDIR_UNUSED=${log_sub_unused:-$log_sub_unused_def}
-
-    echo -e "\n${C_YELLOW}--- Configure Helper Images ---${C_RESET}"
-    local backup_image_def="docker/alpine-tar-zstd:latest"
-    local explore_image_def="debian:trixie-slim"
-    
-    read -p "Backup Helper Image [${C_GREEN}${backup_image_def}${C_RESET}]: " bk_img
-    BACKUP_IMAGE=${bk_img:-$backup_image_def}
-    
-    read -p "Volume Explorer Image [${C_GREEN}${explore_image_def}${C_RESET}]: " exp_img
-    EXPLORE_IMAGE=${exp_img:-$explore_image_def}
 
     local -a selected_ignored_volumes=()
     read -p $'\n'"${C_YELLOW}Do you want to configure ignored ${C_CYAN}volumes ${C_YELLOW}now? (${C_GREEN}y${C_YELLOW}/${C_RED}N${C_YELLOW})${C_RESET}: " config_vols
@@ -1053,29 +1033,50 @@ app_manager_status() {
         done < <($SUDO_CMD docker compose ls --quiet)
 
         echo "=============================================="
-        echo -e "${C_GREEN}${T_BOLD}App Status Overview ${C_RESET}"
+        echo -e "${C_GREEN}${T_BOLD} App Status Overview ${C_RESET}"
         echo "=============================================="
-        echo -e "\n${C_RESET} --- ${C_YELLOW}Essential Apps (${C_CYAN}${APPS_BASE_PATH}${C_YELLOW}) ${C_RESET}---"
+        echo -e "\n${C_YELLOW} --- Essential Apps (${C_CYAN}${APPS_BASE_PATH}${C_YELLOW}) ---${C_RESET}\n"
+        
         local -a essential_apps; discover_apps "$APPS_BASE_PATH" essential_apps
+        local -a filtered_essential=()
+        
         for app in "${essential_apps[@]}"; do
             if [ "$app" != "$MANAGED_SUBDIR" ]; then
+                filtered_essential+=("$app")
+            fi
+        done
+
+        if [ ${#filtered_essential[@]} -eq 0 ]; then
+            echo -e "\n ${C_RED}No essential apps found.${C_RESET}"
+        else
+            for app in "${filtered_essential[@]}"; do
                 if [[ -v running_projects[${app,,}] ]]; then 
                     echo -e " ${C_GREEN}[RUNNING]${C_RESET}\t$app"
                 else 
                     echo -e " ${C_RED}[STOPPED]${C_RESET}\t$app"
                 fi
-            fi
-        done
-        echo -e "\n${C_RESET}----------------------------------------------"
-        echo -e "\n${C_YELLOW}--- Managed Apps (${C_CYAN}${MANAGED_SUBDIR}${C_YELLOW}) ---${C_RESET}"
-        local -a managed_apps; local managed_path="$APPS_BASE_PATH/$MANAGED_SUBDIR"; discover_apps "$managed_path" managed_apps
-        if [ ${#managed_apps[@]} -eq 0 ]; then echo "No managed apps found."; else
-            for app in "${managed_apps[@]}"; do
-                if [[ -v running_projects[$app] ]]; then echo -e " ${C_GREEN}[RUNNING]${C_RESET}\t$app"; else echo -e " ${C_RED}[STOPPED]${C_RESET}\t$app"; fi
             done
         fi
+
+        echo -e "\n${C_RESET}----------------------------------------------"
+        echo -e "\n${C_YELLOW} --- Managed Apps (${C_CYAN}${MANAGED_SUBDIR}${C_YELLOW}) ---${C_RESET}\n"
+        
+        local -a managed_apps; local managed_path="$APPS_BASE_PATH/$MANAGED_SUBDIR"; discover_apps "$managed_path" managed_apps
+        
+        if [ ${#managed_apps[@]} -eq 0 ]; then 
+            echo -e "\n ${C_RED}No managed apps found.${C_RESET}"
+        else
+            for app in "${managed_apps[@]}"; do
+                if [[ -v running_projects[$app] ]]; then
+                    echo -e " ${C_GREEN}[RUNNING]${C_RESET}\t$app"
+                else
+                    echo -e " ${C_RED}[STOPPED]${C_RESET}\t$app"
+                fi
+            done
+        fi
+
         echo -e "${C_RESET}"
-        echo "===================================================="
+        echo "=============================================="
     ) | less -RX --prompt="$less_prompt"
 }
 
