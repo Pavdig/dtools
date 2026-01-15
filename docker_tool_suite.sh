@@ -41,7 +41,7 @@ if tput setaf 1 > /dev/null 2>&1; then
     C_CYAN=$(tput setaf 6)
     T_BOLD=$(tput bold)
     C_GRAY=$(tput bold)$(tput setaf 0)
-    C_RESET=$(tput sgr0)
+    C_RESET=$'\e[0m'
     TICKMARK=$'\xE2\x9C\x93'
 else
     C_RED=""
