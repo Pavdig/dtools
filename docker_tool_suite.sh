@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.5.0.8
+SCRIPT_VERSION=v1.5.0.9
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -1672,13 +1672,13 @@ volume_smart_backup_main() {
         done
     fi
 
-    local current_date=$(date +'%d.%m.%Y')
+    local current_date=$(date +'%Y-%m-%d')
     local archive_name=""
     
     echo -e "\n${C_YELLOW}--- Archive Naming ---${C_RESET}"
     echo -e "  1) Default      : ${C_CYAN}Apps-backup[${current_date}].7z ${C_RESET}"
     echo -e "  2) Semi-Default : ${C_CYAN}Apps-backup(${C_RESET}(User defined)${C_CYAN})[${current_date}].7z ${C_RESET}"
-    echo -e "  3) Custom Name  : (User defined)"
+    echo -e "  3) Custom Name  : (User defined).7z"
     echo -e "  4) Precision    : ${C_CYAN}Apps-backup[${current_date}_HH-MM-SS].7z\n ${C_RESET}"
     read -p "${C_YELLOW}Select naming convention [${C_RESET}1${C_YELLOW}-${C_RESET}4${C_YELLOW}]: ${C_RESET}" name_choice
 
@@ -1700,7 +1700,7 @@ volume_smart_backup_main() {
             archive_name="$custom_name"
             ;;
         4)
-            archive_name="Apps-backup[$(date +'%d.%m.%Y_%H-%M-%S')].7z"
+            archive_name="Apps-backup[$(date +'%Y-%m-%d_%H-%M-%S')].7z"
             ;;
         *) 
             archive_name="Apps-backup[${current_date}].7z"
