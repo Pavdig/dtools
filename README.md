@@ -2,7 +2,7 @@
 
 A Bash script with a Text User Interface (TUI) to simplify managing Docker Compose applications, backups, and updates on Linux servers.
 
-## 🚀 Features
+## 📋 Features
 
 - **App Management:** Start, stop, restart, and force recreate containers. Includes an update checker to only recreate changed images.
 - **Backups:** Auto-detects and backs up volumes for specific apps or standalone volumes. Supports `zstd` compression and **AES-256 encrypted** `7-Zip` archives using a secure local key.
@@ -10,7 +10,7 @@ A Bash script with a Text User Interface (TUI) to simplify managing Docker Compo
 - **Maintenance:**  View logs, inspect image healthchecks, prune system, and manage local image history for rollbacks.
 - **Safety:** Includes "Dry Run" modes and validates configuration inputs (paths, integers) to prevent errors.
 
-## 🛠️ Installation
+## 🏗️ Installation
 
 1. **Clone the repo:**
    ```bash
@@ -25,9 +25,9 @@ A Bash script with a Text User Interface (TUI) to simplify managing Docker Compo
    ```bash
    ./docker_tool_suite.sh
    ```
-   *The script will auto-install dependencies (openssl, 7zip) and guide you through the initial setup wizard.*
+   *The script may ask you to install dependencies (openssl, 7zip) and guide you through the initial setup wizard.*
 
-## 📖 Usage
+## 🛠️ Usage
 
 **Interactive Mode:**
 Run with sudo to access the menu:
@@ -46,7 +46,7 @@ sudo ./docker_tool_suite.sh update --cron
 sudo ./docker_tool_suite.sh update-unused --cron
 ```
 
-## 📂 Configuration
+## 📐 Configuration
 
 Settings are stored in `~/.config/dtools/config.conf`.
 You can change paths, retention policies, and helper images directly inside the script via **Settings Manager** in the main menu.
