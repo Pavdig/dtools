@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.5.0.9
+SCRIPT_VERSION=v1.5.1
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -1624,14 +1624,14 @@ volume_smart_backup_main() {
     if [[ -n "${ENCRYPTED_ARCHIVE_PASSWORD-}" ]]; then
         echo -e "\n${C_CYAN}A default archive password is configured.${C_RESET}"
         while true; do
-            read -p "Choose: ${C_CYAN}(U)se saved${C_RESET}, ${C_YELLOW}(E)nter new${C_RESET}, ${C_GRAY}(N)o password${C_RESET}, ${C_RED}(C)ancel${C_RESET}: " pass_choice
+            read -p "${C_CYAN}Select: ${C_YELLOW}(U)se saved${C_RESET}, ${C_RESET}(E)nter new, ${C_GRAY}(N)o password${C_RESET}, ${C_RED}(C)ancel${C_RESET}: " pass_choice
             case "${pass_choice,,}" in
                 u|U|use|USE)
                     archive_password=$(decrypt_pass "${ENCRYPTED_ARCHIVE_PASSWORD}")
                     if [[ -z "$archive_password" ]]; then
                         echo -e "${C_RED}Error: Decryption failed. Please enter manually.${C_RESET}"
                     else
-                        echo -e "${C_CYAN}Using saved password.${C_RESET}"
+                        echo -e "${C_CYAN}Using ${C_YELLOW}saved ${C_CYAN}password.${C_RESET}"
                         password_is_set=true
                     fi
                     break
@@ -1678,7 +1678,7 @@ volume_smart_backup_main() {
     echo -e "\n${C_YELLOW}--- Archive Naming ---${C_RESET}"
     echo -e "  1) Default      : ${C_CYAN}Apps-backup[${current_date}].7z ${C_RESET}"
     echo -e "  2) Semi-Default : ${C_CYAN}Apps-backup(${C_RESET}(User defined)${C_CYAN})[${current_date}].7z ${C_RESET}"
-    echo -e "  3) Custom Name  : (User defined).7z"
+    echo -e "  3) Custom Name  : (User defined)${C_CYAN}.7z${C_RESET}"
     echo -e "  4) Precision    : ${C_CYAN}Apps-backup[${current_date}_HH-MM-SS].7z\n ${C_RESET}"
     read -p "${C_YELLOW}Select naming convention [${C_RESET}1${C_YELLOW}-${C_RESET}4${C_YELLOW}]: ${C_RESET}" name_choice
 
