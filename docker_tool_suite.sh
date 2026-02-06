@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.5.1
+SCRIPT_VERSION=v1.5.2
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -71,6 +71,9 @@ else
     CURRENT_USER="${USER:-$(whoami)}"
 fi
 SCRIPT_PATH=$(readlink -f "$0")
+
+# Capture original location before switching context
+ORIGINAL_PWD="$PWD"
 
 # Unconditionally switch to HOME or Root to prevent "getwd" errors
 # if the original launch directory is deleted while the script is running.
@@ -779,40 +782,159 @@ initial_setup() {
     echo -e "\n${C_GREEN}${TICKMARK} Setup complete! The script will now continue.${C_RESET}\n"; sleep 2
 }
 
-validate_and_edit_compose() {
-    local app_name="$1"
-    local compose_file="$2"
+install_autocompletion() {
+    check_root
+    local user_home="/home/${CURRENT_USER}"
+    local shell_rc=""
+    local shell_type=""
     
-    while true; do
-        local config_output
-        if ! config_output=$($SUDO_CMD docker compose -f "$compose_file" config 2>&1); then
-            log "ERROR: Invalid Compose configuration for '$app_name'."
-            
-            echo -e "${C_RED}Validation failed for '$app_name':${C_RESET}"
-            echo -e "${C_GRAY}----------------------------------------${C_RESET}"
-            echo -e "${config_output}"
-            echo -e "${C_GRAY}----------------------------------------${C_RESET}"
+    # Detect Shell via Parent Process
+    local parent_process
+    parent_process=$(ps -o comm= -p $PPID 2>/dev/null || echo "$SHELL")
+    
+    if [[ "$parent_process" =~ "zsh" ]]; then
+        shell_rc="${user_home}/.zshrc"
+        shell_type="zsh"
+    elif [[ "$parent_process" =~ "bash" ]]; then
+        shell_rc="${user_home}/.bashrc"
+        shell_type="bash"
+    else
+        echo -e "${C_RED}Could not detect supported shell (Bash/Zsh).${C_RESET}"
+        return 1
+    fi
+    echo -e "${C_YELLOW}Detected shell: ${C_CYAN}${shell_type}${C_YELLOW} | Config: ${C_CYAN}${shell_rc}${C_RESET}"
+    
+    # Prepare Content
+    local new_content
+    new_content="# >>> Dtools Autocompletion >>>"
+    new_content+=$'\n'
+    if [[ "$shell_type" == "zsh" ]]; then
+        # --- ZSH VERSION ---
+        new_content+=$(cat <<'EOF'
+#compdef dtools
+_dtools() {
+    local context state line
+    typeset -A opt_args
 
-            if [[ "$IS_CRON_RUN" == "true" ]]; then
-                log "Skipping '$app_name' due to config error (Cron mode)."
-                return 1
-            fi
+    _arguments -C \
+        '1: :->cmds' \
+        '*:: :->args'
 
-            read -p "${C_YELLOW}Do you want to ${C_RESET}(${C_GREEN}e${C_RESET})${C_GREEN}dit ${C_YELLOW}this file or ${C_RESET}(${C_RED}s${C_RESET})${C_RED}kip${C_YELLOW}? ${C_RESET}[${C_GREEN}e${C_RESET}/${C_RED}S${C_RESET}]: " choice
-            if [[ "${choice,,}" == "e" || "${choice,,}" == "E" ]]; then
-                local editor="${EDITOR:-nano}"
-                echo -e "${C_CYAN}Opening file with $editor...${C_RESET}"
-                $editor "$compose_file"
-                echo -e "${C_CYAN}File saved. Retrying validation...${C_RESET}"
-                continue
-            else
-                echo -e "${C_YELLOW}Skipping '$app_name'.${C_RESET}"
-                return 1
-            fi
-        else
-            return 0
+    case $state in
+        cmds)
+            local -a commands
+            commands=(
+                'update:Update all running compose applications'
+                'update-unused:Update unused images'
+                '--quick-backup:Backup specific volumes'
+                '-qb:Backup specific volumes'
+                '--help:Show help'
+                '-h:Show help'
+                '--version:Show version'
+                '-v:Show version'
+            )
+            _describe 'command' commands
+            ;;
+        args)
+            case $line[1] in
+                --quick-backup|-qb)
+                    local -a volumes
+                    volumes=("${(@f)$(docker volume ls -q 2>/dev/null)}")
+                    
+                    # _alternative allows us to present multiple types of completion at once.
+                    # 1. Docker Volumes (using compadd)
+                    # 2. Files/Directories (using _files)
+                    _alternative \
+                        "volumes:Docker Volume:compadd -a volumes" \
+                        "files:Filename:_files"
+                    ;;
+                *)
+                    # For all other commands, default to file completion
+                    _files
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+compdef _dtools dtools docker_tool_suite.sh
+EOF
+)
+    else
+        # --- BASH VERSION ---
+        new_content+=$(cat <<'EOF'
+_dtools_completions() {
+    local cur prev opts
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+    opts="update update-unused --quick-backup -qb --help -h --version -v"
+
+    local is_qb=false
+    for ((i=1; i < COMP_CWORD; i++)); do
+        if [[ "${COMP_WORDS[i]}" == "-qb" || "${COMP_WORDS[i]}" == "--quick-backup" ]]; then
+            is_qb=true
+            break
         fi
     done
+
+    if [[ "$is_qb" == "true" ]]; then
+        local volumes
+        volumes=$(docker volume ls -q 2>/dev/null)
+        local IFS=$'\n'
+        # Add volumes to completion
+        COMPREPLY=( $(compgen -W "${volumes}" -- ${cur}) )
+        # Add files/dirs to completion (Bash fallback)
+        while IFS= read -r f; do
+            COMPREPLY+=( "$f" )
+        done < <(compgen -f -- "${cur}")
+        return 0
+    fi
+
+    if [[ ${cur} == -* ]] || [[ ${COMP_CWORD} -eq 1 ]]; then
+        COMPREPLY=( $(compgen -W "${opts}" -- ${cur}) )
+        return 0
+    fi
+}
+complete -F _dtools_completions dtools
+EOF
+)
+    fi
+    new_content+=$'\n'
+    new_content+="# <<< Dtools Autocompletion <<<"
+    
+    # Installation Logic
+    if grep -Fq "# >>> Dtools Autocompletion >>>" "$shell_rc"; then
+        echo -e "${C_YELLOW}Updating existing autocompletion block (in-place)...${C_RESET}"
+        local temp_rc; temp_rc=$(mktemp)
+        awk -v new_block="$new_content" '
+            BEGIN { printing=1 }
+            /^# >>> Dtools Autocompletion >>>/ { printing=0; print new_block; next }
+            /^# <<< Dtools Autocompletion <<</ { printing=1; next }
+            printing { print }
+        ' "$shell_rc" > "$temp_rc"
+        cat "$temp_rc" > "$shell_rc"
+        rm "$temp_rc"
+    else
+        echo -e "${C_YELLOW}Appending new autocompletion block...${C_RESET}"
+        [ -n "$(tail -c1 "$shell_rc")" ] && echo "" >> "$shell_rc"
+        echo "$new_content" >> "$shell_rc"
+    fi
+    echo -e "${C_GREEN}${TICKMARK} Autocompletion installed/updated!${C_RESET}"
+    echo -e "${C_GRAY}Please run 'source ${shell_rc}' (or restart terminal) to apply changes.${C_RESET}"
+}
+
+validate_and_edit_compose() {
+    local app_name="$1"
+    local file="$2"
+    
+    # Simple validation: ensure the file actually exists
+    if [[ ! -f "$file" ]]; then
+        log "Error: Compose file for '$app_name' not found."
+        echo -e "${C_RED}Error: Compose file not found: $file${C_RESET}"
+        return 1
+    fi
+    return 0
 }
 
 _start_app_task() {
@@ -828,10 +950,10 @@ _start_app_task() {
     log "Starting containers for '$app_name' (Args: ${extra_args:-none})..."
     if execute_and_log $SUDO_CMD docker compose -f "$compose_file" up -d $extra_args; then
         log "Successfully started '$app_name'."
-        echo -e "${C_GREEN}Successfully started '$app_name'.${C_RESET}"
+        echo -e "${C_GREEN}Successfully started '${C_CYAN}$app_name${C_GREEN}'.${C_RESET}"
     else
         log "ERROR: Failed to start '$app_name'."
-        echo -e "${C_RED}Failed to start '$app_name'. Check log for details.${C_RESET}"
+        echo -e "${C_RED}Failed to start '${C_CYAN}$app_name${C_RED}'! Check log for details.${C_RESET}"
     fi
 }
 
@@ -845,10 +967,10 @@ _stop_app_task() {
 
     if execute_and_log $SUDO_CMD docker compose -f "$compose_file" down --remove-orphans; then
         log "Successfully stopped '$app_name'."
-        echo -e "${C_GREEN}Successfully stopped '$app_name'.${C_RESET}"
+        echo -e "${C_GREEN}Successfully stopped '${C_CYAN}$app_name${C_GREEN}'.${C_RESET}"
     else
         log "ERROR: Failed to stop '$app_name'."
-        echo -e "${C_RED}Failed to stop '$app_name'. Check log for details.${C_RESET}"
+        echo -e "${C_RED}Failed to stop '${C_CYAN}$app_name${C_RED}'! Check log for details.${C_RESET}"
     fi
 }
 
@@ -1859,6 +1981,138 @@ volume_smart_backup_main() {
     fi
 }
 
+quick_backup_handler() {
+    local args=("$@")
+    local custom_path=""
+    local -a target_volumes=()
+
+    # Parse Arguments: Check if last arg is a path
+    if [[ ${#args[@]} -gt 0 ]]; then
+        local last_arg="${args[-1]}"
+        # If it starts with / or . or ~ (expanded), treat as path
+        if [[ "$last_arg" =~ ^/ || "$last_arg" =~ ^\. ]]; then
+            custom_path="$last_arg"
+            unset 'args[${#args[@]}-1]'
+        fi
+    fi
+    target_volumes=("${args[@]}")
+
+    if [[ ${#target_volumes[@]} -eq 0 ]]; then
+        echo -e "${C_RED}Error: No Docker Volumes specified!${C_RESET}\n"
+        echo -e "${C_GRAY}Example: dtools volume1 volume2 /path/to/dir"
+        exit 1
+    fi
+
+    # Dependencies & Config Fallback
+    check_root
+    # Fallback defaults if config not loaded
+    BACKUP_IMAGE="${BACKUP_IMAGE:-docker/alpine-tar-zstd:latest}"
+    local backup_root="${custom_path:-${BACKUP_LOCATION:-}}"
+
+    if [[ -z "$backup_root" ]]; then
+        echo -e "${C_RED}Error: No backup location found.${C_RESET}"
+        echo "Please provide a path as the last argument or configure 'BACKUP_LOCATION'."
+        exit 1
+    fi
+
+    # Resolve relative paths against where the user actually ran the script
+    if [[ -n "$custom_path" ]]; then
+        # If path does NOT start with / (it is relative, e.g., "./" or "../"), prepend ORIGINAL_PWD
+        if [[ ! "$custom_path" =~ ^/ ]]; then
+            backup_root="${ORIGINAL_PWD}/${custom_path}"
+        fi
+    fi
+    
+    # Normalize path (handles ../, ./, and double slashes)
+    backup_root=$(realpath -m "$backup_root")
+    local current_ts=$(date +'%Y-%m-%d_%H-%M-%S')
+    local backup_dir="${backup_root}/${current_ts}"
+
+    echo -e "${C_YELLOW}--- Quick Backup Started ---${C_RESET}"
+    echo -e "Destination: ${C_CYAN}${backup_dir}${C_RESET}"
+    
+    if ! command -v docker &>/dev/null; then echo "Error: Docker not found."; exit 1; fi
+    
+    # Check for helper image without full interactive 'ensure' function
+    if ! $SUDO_CMD docker image inspect "${BACKUP_IMAGE}" &>/dev/null; then
+        echo -e "${C_YELLOW}Pulling helper image: ${BACKUP_IMAGE}...${C_RESET}"
+        $SUDO_CMD docker pull "${BACKUP_IMAGE}" >/dev/null
+    fi
+
+    mkdir -p "$backup_dir"
+    chown "${CURRENT_USER}:${CURRENT_USER}" "$backup_dir"
+
+    # Analyze Volumes & Group by App
+    declare -A app_volumes_map
+    declare -A app_dir_map
+    local -a standalone_volumes=()
+
+    for volume in "${target_volumes[@]}"; do
+        # Verify volume exists
+        if ! $SUDO_CMD docker volume inspect "$volume" &>/dev/null; then
+            echo -e "${C_RED}Warning: Volume '$volume' not found. Skipping.${C_RESET}"
+            continue
+        fi
+
+        local container_id
+        container_id=$($SUDO_CMD docker ps -q --filter "volume=${volume}" | head -n 1)
+
+        if [[ -n "$container_id" ]]; then
+            local project_name
+            project_name=$($SUDO_CMD docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$container_id")
+
+            if [[ -n "$project_name" ]]; then
+                app_volumes_map["$project_name"]+="${volume} "
+                if [[ ! -v "app_dir_map[$project_name]" ]]; then
+                    local found_dir
+                    found_dir=$(_find_project_dir_by_name "$project_name")
+                    if [[ -n "$found_dir" ]]; then
+                        app_dir_map["$project_name"]="$found_dir"
+                    else
+                        # If we can't find the compose file, treat as standalone
+                        standalone_volumes+=("$volume")
+                        unset 'app_volumes_map["$project_name"]'
+                        continue
+                    fi
+                fi
+            else
+                standalone_volumes+=("$volume")
+            fi
+        else
+            standalone_volumes+=("$volume")
+        fi
+    done
+
+    # Perform Backups
+    # For App-Linked Volumes
+    for app_name in "${!app_volumes_map[@]}"; do
+        echo -e "Processing stack: ${C_CYAN}${app_name}${C_RESET}"
+        local app_dir=${app_dir_map[$app_name]}
+        
+        _stop_app_task "$app_name" "$app_dir"
+        
+        local -a vols_to_backup
+        read -r -a vols_to_backup <<< "${app_volumes_map[$app_name]}"
+        
+        for volume in "${vols_to_backup[@]}"; do
+            echo -e "  -> Backing up ${C_GREEN}${volume}${C_RESET}..."
+            $SUDO_CMD docker run --rm -v "${volume}:/volume:ro" -v "${backup_dir}:/backup" "${BACKUP_IMAGE}" tar -C /volume --zstd -cf "/backup/${volume}.tar.zst" .
+        done
+        
+        _start_app_task "$app_name" "$app_dir"
+    done
+
+    # For Standalone Volumes
+    for volume in "${standalone_volumes[@]}"; do
+        echo -e "Backing up standalone: ${C_GREEN}${volume}${C_RESET}..."
+        $SUDO_CMD docker run --rm -v "${volume}:/volume:ro" -v "${backup_dir}:/backup" "${BACKUP_IMAGE}" tar -C /volume --zstd -cf "/backup/${volume}.tar.zst" .
+    done
+
+    # Cleanup permissions
+    $SUDO_CMD chown -R "${CURRENT_USER}:${CURRENT_USER}" "$backup_dir"
+    echo -e "\n${C_GREEN}${TICKMARK} Quick backup complete!${C_RESET}"
+}
+
 volume_restore_main() {
     clear; echo -e "${C_GREEN}Starting Docker Volume Restore...${C_RESET}"
     log "--- Starting Volume Restore Session ---"
@@ -2785,6 +3039,7 @@ settings_manager_menu() {
         "Ignored Images"
         "Archive Settings"
         "Shell Alias"
+        "Install Autocompletion"
         "Task Scheduler"
     )
     while true; do
@@ -2828,6 +3083,9 @@ settings_manager_menu() {
                 echo -e "\nPress Enter to return..."; read -r
                 ;;
             7)
+                install_autocompletion; echo -e "\nPress Enter..."; read -r
+                ;;
+            8)
                 scheduler_menu
                 echo -e "\nPress Enter to return..."; read -r
                 ;;
@@ -2862,15 +3120,18 @@ main_menu() {
 
 # --- Argument Parsing at script entry ---
 if [[ $# -gt 0 ]]; then
-    if [[ ! -f "$CONFIG_FILE" ]]; then echo -e "${C_RED}Config not found. Please run with 'sudo' for initial setup.${C_RESET}"; exit 1; fi
-    chmod 600 "$CONFIG_FILE" 2>/dev/null || true
+    if [[ -f "$CONFIG_FILE" ]]; then
+        chmod 600 "$CONFIG_FILE" 2>/dev/null || true
+        load_config "$CONFIG_FILE"
+    fi
 
     case "$1" in
         --help|-h)
             echo "=============================================="
             echo -e " ${C_GREEN}${T_BOLD}Docker Tool Suite ${C_CYAN}${SCRIPT_VERSION}${C_GREEN}${T_BOLD} - Help Menu${C_RESET}"
             echo "=============================================="
-            echo -e "\n ${C_YELLOW}Description:${C_RESET}"
+            echo
+            echo -e "${C_YELLOW}Description:${C_RESET}"
             echo -e "   A self-hosted CLI tool to manage Docker Compose stacks,"
             echo -e "   volumes, backups, logs, and automated updates."
             echo
@@ -2881,22 +3142,34 @@ if [[ $# -gt 0 ]]; then
             echo -e " ${C_YELLOW}Commands:${C_RESET}"
             echo -e "   ${C_GRAY}(no args)${C_RESET}       Launch the interactive TUI menu."
             echo -e "   ${C_GREEN}--help${C_RESET}          Show this help message."
+            echo -e "   ${C_GRAY}(alias: -h)${C_RESET}"
+            echo -e "   ${C_GREEN}--version${C_RESET}       Show script version."
+            echo -e "   ${C_GRAY}(alias: -v)${C_RESET}"
             echo -e "   ${C_GREEN}update${C_RESET}          Update all running compose applications."
             echo -e "   ${C_GREEN}update-unused${C_RESET}   Update unused images and prune dangling ones."
+            echo -e "   ${C_GREEN}--quick-backup${C_RESET}  Backup specific volumes immediately."
+            echo -e "   ${C_GRAY}(alias: -qb)${C_RESET}"
             echo
-            echo -e " ${C_YELLOW}Options (for updates):${C_RESET}"
+            echo -e " ${C_YELLOW}Quick Backup Usage examples:${C_RESET}"
+            echo -e "   dtools --quick-backup volume1 [volume2...] /path/to/custom/destination ${C_GRAY}(Creates backups to provided dir)${C_RESET}"
+            echo -e "   dtools -qb volume1 volume2 [volume3...] ${C_GRAY}(Creates backups to dir saved in your config.conf)${C_RESET}"
+            echo
+            echo -e " ${C_YELLOW}Update Options:${C_RESET}"
             echo -e "   ${C_GREEN}--cron${C_RESET}          Optimized for scheduled tasks."
             echo -e "   ${C_GREEN}--dry-run${C_RESET}       Simulate actions without making changes."
             echo "=============================================="
             echo
             exit 0 ;;
-    esac
 
-    load_config "$CONFIG_FILE"
-    prune_old_logs
-    
-    case "$1" in
+        --quick-backup|-qb)
+            shift
+            # If no config was loaded and no path provided, quick_backup_handler will warn.
+            quick_backup_handler "$@"
+            exit 0 ;;
+
         update)
+            # Config is mandatory for update tasks
+            if [[ ! -f "$CONFIG_FILE" ]]; then echo -e "${C_RED}Error: Config not found. Run interactive mode first.${C_RESET}"; exit 1; fi
             shift
             log_prefix="dtools-au"
             while (( "$#" )); do
@@ -2912,16 +3185,18 @@ if [[ $# -gt 0 ]]; then
             if [ "$IS_CRON_RUN" = true ]; then
                 _enable_cron_logging "${LOG_SUBDIR_UPDATE:-apps-update-logs}" "$log_prefix"
             else
+                echo -e "${C_GRAY}Logging output to: $LOG_FILE${C_RESET}"
                 log_dir="${LOG_DIR}/${LOG_SUBDIR_UPDATE:-apps-update-logs}"
                 mkdir -p "$log_dir"
                 LOG_FILE="${log_dir}/${log_prefix}-$(date +'%Y-%m-%d').log"
-                echo -e "${C_GRAY}Logging output to: $LOG_FILE${C_RESET}"
             fi
             
             app_manager_update_all_known_apps
             exit 0 ;;
 
         update-unused)
+            # Config is mandatory for update tasks
+            if [[ ! -f "$CONFIG_FILE" ]]; then echo -e "${C_RED}Error: Config not found. Run interactive mode first.${C_RESET}"; exit 1; fi
             shift 
             log_prefix="dtools-uil"
             while (( "$#" )); do
@@ -2937,13 +3212,17 @@ if [[ $# -gt 0 ]]; then
             if [ "$IS_CRON_RUN" = true ]; then
                 _enable_cron_logging "${LOG_SUBDIR_UNUSED:-unused-images-update-logs}" "$log_prefix"
             else
+                echo -e "${C_GRAY}Logging output to: $LOG_FILE${C_RESET}"
                 log_dir="${LOG_DIR}/${LOG_SUBDIR_UNUSED:-unused-images-update-logs}"
                 mkdir -p "$log_dir"
                 LOG_FILE="${log_dir}/${log_prefix}-$(date +'%Y-%m-%d').log"
-                echo -e "${C_GRAY}Logging output to: $LOG_FILE${C_RESET}"
             fi
             
             update_unused_images_main
+            exit 0 ;;
+
+        --version|-v)
+            echo -e "${C_CYAN}Docker Tool Suite: ${C_GREEN}$SCRIPT_VERSION${C_RESET}"
             exit 0 ;;
 
         *) 
@@ -2953,7 +3232,7 @@ if [[ $# -gt 0 ]]; then
     esac
 fi
 
-# --- Config Validation & Startup ---
+# --- Config Validation & Startup (Interactive Mode) ---
 if [[ ! -f "$CONFIG_FILE" ]]; then
     initial_setup
 fi
@@ -2966,11 +3245,11 @@ if [[ -f "$CONFIG_FILE" ]]; then
     validate_loaded_config
 
     if [[ -z "${APPS_BASE_PATH-}" ]]; then
-        echo -e "${C_RED}Error: Configuration file is empty or corrupt.${C_RESET}"
+        echo -e "${C_RED}Error: Configuration file is empty or corrupt!${C_RESET}"
         backup_conf="${CONFIG_FILE}.$(date +%Y-%m-%d_%H-%M-%S).broken"
         mv "$CONFIG_FILE" "$backup_conf"
         echo -e "${C_YELLOW}Backed up broken config to: ${C_GRAY}${backup_conf}${C_RESET}"
-        
+        echo
         echo -e "${C_GREEN}Restarting initial setup...${C_RESET}\n"
         sleep 2
         initial_setup

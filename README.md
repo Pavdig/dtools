@@ -9,6 +9,7 @@ A Bash script with a Text User Interface (TUI) to simplify managing Docker Compo
 - **Automation:** Built-in scheduler (Cron) for automatic compose apps updates and unused images.
 - **Maintenance:**  View logs, inspect image healthchecks, prune system, and manage local image history for rollbacks.
 - **Safety:** Includes "Dry Run" modes and validates configuration inputs (paths, integers) to prevent errors.
+- **Experience:** Native **Bash** and **Zsh** autocompletion for commands, `Docker volumes`, and file paths.
 
 ## 🏗️ Installation
 
@@ -16,6 +17,7 @@ A Bash script with a Text User Interface (TUI) to simplify managing Docker Compo
    ```bash
    git clone https://github.com/Pavdig/dtools.git
    cd dtools
+
 2. **Make executable:**
    ```bash
    chmod +x docker_tool_suite.sh
@@ -26,6 +28,8 @@ A Bash script with a Text User Interface (TUI) to simplify managing Docker Compo
    ./docker_tool_suite.sh
    ```
    *The script may ask you to install dependencies (openssl, 7zip) and guide you through the initial setup wizard.*
+
+   **Tip:** Restart your terminal (or run `source ~/.bashrc` / `source ~/.zshrc`) after the first run to enable autocompletion.
 
 ## 🛠️ Usage
 
@@ -44,9 +48,12 @@ sudo ./docker_tool_suite.sh update --cron
 
 # Clean unused images
 sudo ./docker_tool_suite.sh update-unused --cron
+
+# Quick Backup (supports autocompletion for Docker volumes and paths)
+dtools -qb <volume_name> /path/to/backup
 ```
 
 ## 📐 Configuration
 
-Settings are stored in `~/.config/dtools/config.conf`.
-You can change paths, retention policies, and helper images directly inside the script via **Settings Manager** in the main menu.
+* Settings are stored in `~/.config/dtools/config.conf`.
+* You can change paths, retention policies, and helper images directly inside the script via **Settings Manager** in the main menu.
