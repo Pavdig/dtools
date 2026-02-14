@@ -41,16 +41,24 @@ sudo ./docker_tool_suite.sh
 dtools
 ```
 
-**CLI (Cron) Mode:**
+**CLI / Automation Mode:**
 ```bash
-# Update all apps
-sudo ./docker_tool_suite.sh update --cron
+# Update specific applications (space separated)
+dtools update app1 app2
 
-# Clean unused images
-sudo ./docker_tool_suite.sh update-unused --cron
+# Update ALL applications
+dtools update --all
+
+# Update unused images (prune dangling)
+dtools update-unused
 
 # Quick Backup (supports autocompletion for Docker volumes and paths)
 dtools -qb <volume_name> /path/to/backup
+```
+
+**Flags:**
+*   `--dry-run`: Simulate actions without changes (e.g., `dtools update --all --dry-run`).
+*   `--cron`: Optimized for scheduled tasks.
 ```
 
 ## 📐 Configuration

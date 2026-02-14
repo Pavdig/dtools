@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.5.2
+SCRIPT_VERSION=v1.5.3
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -804,27 +804,32 @@ install_autocompletion() {
     fi
     echo -e "${C_YELLOW}Detected shell: ${C_CYAN}${shell_type}${C_YELLOW} | Config: ${C_CYAN}${shell_rc}${C_RESET}"
     
+    # Prepare Paths for injection
+    local apps_dir="${APPS_BASE_PATH}"
+    local managed_dir="${APPS_BASE_PATH}/${MANAGED_SUBDIR}"
+
     # Prepare Content
     local new_content
     new_content="# >>> Dtools Autocompletion >>>"
     new_content+=$'\n'
     if [[ "$shell_type" == "zsh" ]]; then
         # --- ZSH VERSION ---
-        new_content+=$(cat <<'EOF'
+        # We inject the literal paths so Zsh knows where to look for folders
+        new_content+=$(cat <<EOF
 #compdef dtools
 _dtools() {
     local context state line
     typeset -A opt_args
 
-    _arguments -C \
-        '1: :->cmds' \
+    _arguments -C \\
+        '1: :->cmds' \\
         '*:: :->args'
 
-    case $state in
+    case \$state in
         cmds)
             local -a commands
             commands=(
-                'update:Update all running compose applications'
+                'update:Update specific or all apps'
                 'update-unused:Update unused images'
                 '--quick-backup:Backup specific volumes'
                 '-qb:Backup specific volumes'
@@ -836,16 +841,20 @@ _dtools() {
             _describe 'command' commands
             ;;
         args)
-            case $line[1] in
+            case \$line[1] in
+                update)
+                    # Complete folder names from both App dirs
+                    _path_files -W "(${apps_dir} ${managed_dir})" -/
+                    ;;
                 --quick-backup|-qb)
                     local -a volumes
-                    volumes=("${(@f)$(docker volume ls -q 2>/dev/null)}")
-                    
+                    volumes=("\${(@f)\$(docker volume ls -q 2>/dev/null)}")
+
                     # _alternative allows us to present multiple types of completion at once.
                     # 1. Docker Volumes (using compadd)
                     # 2. Files/Directories (using _files)
-                    _alternative \
-                        "volumes:Docker Volume:compadd -a volumes" \
+                    _alternative \\
+                        "volumes:Docker Volume:compadd -a volumes" \\
                         "files:Filename:_files"
                     ;;
                 *)
@@ -862,37 +871,44 @@ EOF
 )
     else
         # --- BASH VERSION ---
-        new_content+=$(cat <<'EOF'
+        # We inject a 'find' command to list folders in your app directories
+        new_content+=$(cat <<EOF
 _dtools_completions() {
     local cur prev opts
     COMPREPLY=()
-    cur="${COMP_WORDS[COMP_CWORD]}"
-    prev="${COMP_WORDS[COMP_CWORD-1]}"
+    cur="\${COMP_WORDS[COMP_CWORD]}"
+    prev="\${COMP_WORDS[COMP_CWORD-1]}"
     opts="update update-unused --quick-backup -qb --help -h --version -v"
+
+    # Check if 'update' is the command being used
+    if [[ " \${COMP_WORDS[@]} " =~ " update " ]]; then
+        local apps
+        # List directories from both locations, strip paths to just names
+        apps=\$(find "${apps_dir}" "${managed_dir}" -mindepth 1 -maxdepth 1 -type d -printf "%f\n" 2>/dev/null)
+        COMPREPLY=( \$(compgen -W "\${apps} --all --dry-run" -- \${cur}) )
+        return 0
+    fi
 
     local is_qb=false
     for ((i=1; i < COMP_CWORD; i++)); do
-        if [[ "${COMP_WORDS[i]}" == "-qb" || "${COMP_WORDS[i]}" == "--quick-backup" ]]; then
+        if [[ "\${COMP_WORDS[i]}" == "-qb" || "\${COMP_WORDS[i]}" == "--quick-backup" ]]; then
             is_qb=true
             break
         fi
     done
 
-    if [[ "$is_qb" == "true" ]]; then
+    if [[ "\$is_qb" == "true" ]]; then
         local volumes
-        volumes=$(docker volume ls -q 2>/dev/null)
-        local IFS=$'\n'
-        # Add volumes to completion
-        COMPREPLY=( $(compgen -W "${volumes}" -- ${cur}) )
-        # Add files/dirs to completion (Bash fallback)
+        volumes=\$(docker volume ls -q 2>/dev/null)
+        COMPREPLY=( \$(compgen -W "\${volumes}" -- \${cur}) )
         while IFS= read -r f; do
-            COMPREPLY+=( "$f" )
-        done < <(compgen -f -- "${cur}")
+            COMPREPLY+=( "\$f" )
+        done < <(compgen -f -- "\${cur}")
         return 0
     fi
 
-    if [[ ${cur} == -* ]] || [[ ${COMP_CWORD} -eq 1 ]]; then
-        COMPREPLY=( $(compgen -W "${opts}" -- ${cur}) )
+    if [[ \${cur} == -* ]] || [[ \${COMP_CWORD} -eq 1 ]]; then
+        COMPREPLY=( \$(compgen -W "\${opts}" -- \${cur}) )
         return 0
     fi
 }
@@ -985,7 +1001,8 @@ _update_app_task() {
     if ! validate_and_edit_compose "$app_name" "$compose_file"; then return; fi
 
     local was_running=false
-    if $SUDO_CMD docker compose -f "$compose_file" ps --status=running | grep -q 'running'; then
+    # If this returns a non-empty string, at least one service is running.
+    if [ -n "$($SUDO_CMD docker compose -f "$compose_file" ps --services --status=running)" ]; then
         was_running=true
     fi
 
@@ -3145,18 +3162,25 @@ if [[ $# -gt 0 ]]; then
             echo -e "   ${C_GRAY}(alias: -h)${C_RESET}"
             echo -e "   ${C_GREEN}--version${C_RESET}       Show script version."
             echo -e "   ${C_GRAY}(alias: -v)${C_RESET}"
-            echo -e "   ${C_GREEN}update${C_RESET}          Update all running compose applications."
+            echo -e "   ${C_GREEN}update [apps]${C_RESET}   Update specific apps (space separated)."
+            echo -e "   ${C_GREEN}update --all${C_RESET}    Update ALL known applications."
             echo -e "   ${C_GREEN}update-unused${C_RESET}   Update unused images and prune dangling ones."
             echo -e "   ${C_GREEN}--quick-backup${C_RESET}  Backup specific volumes immediately."
             echo -e "   ${C_GRAY}(alias: -qb)${C_RESET}"
             echo
-            echo -e " ${C_YELLOW}Quick Backup Usage examples:${C_RESET}"
-            echo -e "   dtools --quick-backup volume1 [volume2...] /path/to/custom/destination ${C_GRAY}(Creates backups to provided dir)${C_RESET}"
-            echo -e "   dtools -qb volume1 volume2 [volume3...] ${C_GRAY}(Creates backups to dir saved in your config.conf)${C_RESET}"
+            echo -e " ${C_YELLOW}Update Usage examples:${C_RESET}"
+            echo -e "   ${C_CYAN}dtools ${C_GREEN}update ${C_RESET}app1 app2          ${C_GRAY}(Update specific apps)${C_RESET}"
+            echo -e "   ${C_CYAN}dtools ${C_GREEN}update ${C_RESET}--all              ${C_GRAY}(Update all apps)${C_RESET}"
+            echo -e "   ${C_CYAN}dtools ${C_GREEN}update ${C_RESET}--all --dry-run    ${C_GRAY}(Simulate update for all)${C_RESET}"
             echo
-            echo -e " ${C_YELLOW}Update Options:${C_RESET}"
-            echo -e "   ${C_GREEN}--cron${C_RESET}          Optimized for scheduled tasks."
+            echo -e " ${C_YELLOW}Quick Backup Usage examples:${C_RESET}"
+            echo -e "   ${C_CYAN}dtools ${C_GREEN}--quick-backup ${C_RESET}volume1 [volume2...] /path/to/custom/destination ${C_GRAY}(Creates backups to provided dir)${C_RESET}"
+            echo -e "   ${C_CYAN}dtools ${C_GREEN}-qb ${C_RESET}volume1 volume2 [volume3...] ${C_GRAY}(Creates backups to dir saved in your config.conf)${C_RESET}"
+            echo
+            echo -e " ${C_YELLOW}Global Options:${C_RESET}"
+            echo -e "   ${C_GREEN}--cron${C_RESET}          Optimized for scheduled tasks (reduced logging)."
             echo -e "   ${C_GREEN}--dry-run${C_RESET}       Simulate actions without making changes."
+            echo
             echo "=============================================="
             echo
             exit 0 ;;
@@ -3171,27 +3195,85 @@ if [[ $# -gt 0 ]]; then
             # Config is mandatory for update tasks
             if [[ ! -f "$CONFIG_FILE" ]]; then echo -e "${C_RED}Error: Config not found. Run interactive mode first.${C_RESET}"; exit 1; fi
             shift
+            
+            # --- Argument Parsing ---
+            update_all=false
+            target_apps=()
             log_prefix="dtools-au"
+
             while (( "$#" )); do
               case "$1" in
-                --dry-run) DRY_RUN=true; shift ;;
-                --cron) IS_CRON_RUN=true; shift ;;
-                *) echo "Unknown option: $1"; exit 1 ;;
+                --dry-run) 
+                    DRY_RUN=true 
+                    ;;
+                --cron) 
+                    IS_CRON_RUN=true 
+                    ;;
+                --all|-a) 
+                    update_all=true 
+                    ;;
+                -*) 
+                    echo "Error: Unknown option: $1"
+                    exit 1 
+                    ;;
+                *) 
+                    # If it's not a flag, assume it's an app name
+                    target_apps+=("$1") 
+                    ;;
               esac
+              shift
             done
-
+            
+            # --- Logging Setup ---
             if [ "$DRY_RUN" = true ]; then log_prefix="${log_prefix}-dry-run"; fi
 
             if [ "$IS_CRON_RUN" = true ]; then
                 _enable_cron_logging "${LOG_SUBDIR_UPDATE:-apps-update-logs}" "$log_prefix"
             else
-                echo -e "${C_GRAY}Logging output to: $LOG_FILE${C_RESET}"
                 log_dir="${LOG_DIR}/${LOG_SUBDIR_UPDATE:-apps-update-logs}"
                 mkdir -p "$log_dir"
                 LOG_FILE="${log_dir}/${log_prefix}-$(date +'%Y-%m-%d').log"
+                echo -e "${C_GRAY}Logging output to: $LOG_FILE${C_RESET}"
             fi
             
-            app_manager_update_all_known_apps
+            # --- Execution Logic ---
+            if [ "$update_all" = true ]; then
+                # Mode 1: Update ALL apps
+                if [ ${#target_apps[@]} -gt 0 ]; then
+                    echo -e "${C_YELLOW}Note: Specific apps were listed, but '--all' flag takes precedence.${C_RESET}"
+                fi
+                app_manager_update_all_known_apps
+
+            elif [ ${#target_apps[@]} -gt 0 ]; then
+                # Mode 2: Update SPECIFIC apps
+                check_root
+                log "Starting selective update for: ${target_apps[*]}"
+                echo -e "${C_GREEN}Starting selective update for ${#target_apps[@]} app(s)...${C_RESET}"
+
+                for app_name in "${target_apps[@]}"; do
+                    app_dir=$(_find_project_dir_by_name "$app_name")
+                    
+                    if [[ -n "$app_dir" ]]; then
+                        echo -e "\n${C_CYAN}--- Updating App: ${C_YELLOW}${app_name}${C_CYAN} ---${C_RESET}"
+                        _update_app_task "$app_name" "$app_dir"
+                    else
+                        log "Error: App '$app_name' not found."
+                        echo -e "${C_RED}Error: Could not find directory for app '${app_name}'.${C_RESET}"
+                        echo -e "${C_GRAY}(Ensure it exists in ${APPS_BASE_PATH} or the managed subdirectory)${C_RESET}"
+                    fi
+                done
+                log "Selective update task finished."
+
+            else
+                # Mode 3: No arguments provided
+                echo -e "${C_RED}Error: No target specified.${C_RESET}"
+                echo -e "Usage:"
+                echo -e "  dtools update --all              (Update all apps)"
+                echo -e "  dtools update app1 app2 ...      (Update specific apps)"
+                echo -e "  dtools update --all --dry-run    (Simulate update)"
+                exit 1
+            fi
+            
             exit 0 ;;
 
         update-unused)
@@ -3212,10 +3294,10 @@ if [[ $# -gt 0 ]]; then
             if [ "$IS_CRON_RUN" = true ]; then
                 _enable_cron_logging "${LOG_SUBDIR_UNUSED:-unused-images-update-logs}" "$log_prefix"
             else
-                echo -e "${C_GRAY}Logging output to: $LOG_FILE${C_RESET}"
-                log_dir="${LOG_DIR}/${LOG_SUBDIR_UNUSED:-unused-images-update-logs}"
+                log_dir="${LOG_DIR}/${LOG_SUBDIR_UPDATE:-unused-images-update-logs}"
                 mkdir -p "$log_dir"
                 LOG_FILE="${log_dir}/${log_prefix}-$(date +'%Y-%m-%d').log"
+                echo -e "${C_GRAY}Logging output to: $LOG_FILE${C_RESET}"
             fi
             
             update_unused_images_main
