@@ -59,7 +59,6 @@ dtools -qb <volume_name> /path/to/backup
 **Flags:**
 *   `--dry-run`: Simulate actions without changes (e.g., `dtools update --all --dry-run`).
 *   `--cron`: Optimized for scheduled tasks.
-```
 
 ## 📐 Configuration
 
