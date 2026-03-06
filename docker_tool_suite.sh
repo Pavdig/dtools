@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.5.4
+SCRIPT_VERSION=v1.5.4.1
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -436,12 +436,12 @@ configure_shell_alias() {
     echo -e "   2) ${C_RED}Remove Alias${C_RESET}"
     echo -e "   3) ${C_YELLOW}Cancel${C_RESET}"
     echo
-    read -p "${C_YELLOW}Enter choice [${C_RESET}1${C_YELLOW}-${C_RESET}3${C_YELLOW}]: ${C_RESET}" choice
+    read -rp "${C_YELLOW}Enter choice [${C_RESET}1${C_YELLOW}-${C_RESET}3${C_YELLOW}]: ${C_RESET}" choice
 
     case "$choice" in
         1)
             local default_alias="dtools"
-            read -p "Enter alias name [${C_GREEN}${default_alias}${C_RESET}]: " alias_name
+            read -rp "Enter alias name [${C_GREEN}${default_alias}${C_RESET}]: " alias_name
             alias_name=${alias_name:-$default_alias}
 
             if [[ ! "$alias_name" =~ ^[a-zA-Z0-9_]+$ ]]; then
@@ -493,7 +493,7 @@ ensure_tool_installed() {
     if ! command -v "$tool_cmd" &>/dev/null; then
         echo -e "\n${C_RED}Error: '${tool_cmd}' command not found.${C_RESET}"
         echo -e "${C_YELLOW}This tool is required for: ${tool_desc}.${C_RESET}\n"
-        read -p "${C_YELLOW}Do you want to install '${C_CYAN}${package_name}${C_YELLOW}' now? ${C_RESET}(${C_GREEN}Y${C_RESET}/${C_RED}n${C_RESET}): " install_tool
+        read -rp "${C_YELLOW}Do you want to install '${C_CYAN}${package_name}${C_YELLOW}' now? ${C_RESET}(${C_GREEN}Y${C_RESET}/${C_RED}n${C_RESET}): " install_tool
         if [[ "${install_tool:-y}" =~ ^(y|Y|yes|YES)$ ]]; then
              echo -e "${C_CYAN}Installing ${package_name}...${C_RESET}"
              if $SUDO_CMD apt-get update && $SUDO_CMD apt-get install -y "$package_name"; then
@@ -521,7 +521,7 @@ _prompt_input() {
 
     while true; do
         local input_val
-        read -e -p "${prompt_text} [${C_GREEN}${default_val}${C_RESET}]: " input_val
+        read -erp "${prompt_text} [${C_GREEN}${default_val}${C_RESET}]: " input_val
         if [[ -z "$input_val" ]]; then
             output_var="$default_val"
         else
@@ -602,7 +602,7 @@ initial_setup() {
 
     if [ ${#packages_to_install[@]} -gt 0 ]; then
         echo -e "\n${C_RED}Missing tools detected. These are required for encryption and archives.${C_RESET}"
-        read -p "${C_YELLOW}Do you want to install them now via apt? ${C_RESET}(${C_GREEN}Y${C_RESET}/${C_RED}n${C_RESET}): " install_deps
+        read -rp "${C_YELLOW}Do you want to install them now via apt? ${C_RESET}(${C_GREEN}Y${C_RESET}/${C_RED}n${C_RESET}): " install_deps
         if [[ "${install_deps:-y}" =~ ^(y|Y|yes|YES)$ ]]; then
             echo -e "${C_CYAN}Updating package lists and installing...${C_RESET}"
             $SUDO_CMD apt-get update
@@ -649,14 +649,14 @@ initial_setup() {
     _prompt_input "Volume Explorer Image" "$explore_image_def" EXPLORE_IMAGE "text"
 
     local -a selected_ignored_volumes=()
-    read -p $'\n'"${C_YELLOW}Do you want to configure ignored ${C_CYAN}volumes ${C_YELLOW}now? (${C_GREEN}y${C_YELLOW}/${C_RED}N${C_YELLOW})${C_RESET}: " config_vols
+    read -rp $'\n'"${C_YELLOW}Do you want to configure ignored ${C_CYAN}volumes ${C_YELLOW}now? (${C_GREEN}y${C_YELLOW}/${C_RED}N${C_YELLOW})${C_RESET}: " config_vols
     if [[ "${config_vols,,}" =~ ^(y|Y|yes|YES)$ ]]; then
         mapfile -t all_volumes < <(docker volume ls --format "{{.Name}}" | sort)
         interactive_list_builder "Select Volumes to IGNORE during backup" all_volumes selected_ignored_volumes
     fi
     
     local -a selected_ignored_images=()
-    read -p $'\n'"${C_YELLOW}Do you want to configure ignored ${C_CYAN}images ${C_YELLOW}now? (${C_GREEN}y${C_YELLOW}/${C_RED}N${C_YELLOW})${C_RESET}: " config_imgs
+    read -rp $'\n'"${C_YELLOW}Do you want to configure ignored ${C_CYAN}images ${C_YELLOW}now? (${C_GREEN}y${C_YELLOW}/${C_RED}N${C_YELLOW})${C_RESET}: " config_imgs
     if [[ "${config_imgs,,}" =~ ^(y|Y|yes|YES)$ ]]; then
         mapfile -t all_images < <(docker image ls --format "{{.Repository}}:{{.Tag}}" | grep -v "<none>" | sort)
         interactive_list_builder "Select Images to IGNORE during updates" all_images selected_ignored_images
@@ -667,10 +667,10 @@ initial_setup() {
 
     while true; do
         echo -e "${C_GRAY}This password will be used to encrypt 7z backups by default.${C_RESET}"
-        read -sp "Enter a default password (leave blank for none): " archive_pass_1; echo
+        read -srp "Enter a default password (leave blank for none): " archive_pass_1; echo
 
         if [[ -z "$archive_pass_1" ]]; then
-            read -p "${C_RED}You left the password blank! ${C_YELLOW}Disable default encryption? (${C_RED}Y${C_YELLOW}/${C_GREEN}n${C_YELLOW}): ${C_RESET}" confirm_no_pass
+            read -rp "${C_RED}You left the password blank! ${C_YELLOW}Disable default encryption? (${C_RED}Y${C_YELLOW}/${C_GREEN}n${C_YELLOW}): ${C_RESET}" confirm_no_pass
             if [[ "${confirm_no_pass:-y}" =~ ^[Yy]$ ]]; then
                 echo -e "${C_GREEN}-> Default encryption disabled.${C_RESET}"
                 ENCRYPTED_ARCHIVE_PASSWORD=""
@@ -681,7 +681,7 @@ initial_setup() {
             fi
         fi
 
-        read -sp "Confirm password: " archive_pass_2; echo
+        read -srp "Confirm password: " archive_pass_2; echo
 
         if [[ "$archive_pass_1" == "$archive_pass_2" ]]; then
             ENCRYPTED_ARCHIVE_PASSWORD=$(encrypt_pass "${archive_pass_1}")
@@ -714,7 +714,7 @@ initial_setup() {
     echo -e "    Volumes:         ${C_GREEN}${#selected_ignored_volumes[@]} selected${C_RESET}"
     echo -e "    Images:          ${C_GREEN}${#selected_ignored_images[@]} selected${C_RESET}\n"
     
-    read -p "${C_YELLOW}Save this configuration? ${C_RESET}(${C_GREEN}Y${C_RESET}/${C_RED}n${C_RESET}): " confirm_setup
+    read -rp "${C_YELLOW}Save this configuration? ${C_RESET}(${C_GREEN}Y${C_RESET}/${C_RED}n${C_RESET}): " confirm_setup
     if [[ ! "${confirm_setup,,}" =~ ^(y|Y|yes|YES)$ ]]; then echo -e "\n ${C_RED}Setup canceled!\n${C_GRAY}(confirm to save the config)${C_RESET}"; exit 0; fi
 
     echo -e "\n${C_GREEN}Saving configuration...${C_RESET}"; mkdir -p "${CONFIG_DIR}"
@@ -782,14 +782,14 @@ initial_setup() {
 
     # Prompt for Task Scheduler
     echo -e "\n${C_GREEN}--- Task Scheduler ---${C_RESET}\n"
-    read -p "${C_YELLOW}Do you want to configure scheduled tasks ${C_GRAY}(Auto-Updates) ${C_YELLOW}now? ${C_RESET}(${C_CYAN}y${C_RESET}/${C_RED}N${C_RESET}): " config_sched
+    read -rp "${C_YELLOW}Do you want to configure scheduled tasks ${C_GRAY}(Auto-Updates) ${C_YELLOW}now? ${C_RESET}(${C_CYAN}y${C_RESET}/${C_RED}N${C_RESET}): " config_sched
     if [[ "${config_sched,,}" =~ ^(y|Y|yes|YES)$ ]]; then
         scheduler_menu
     fi
 
     # Prompt for Shell Alias
     echo -e "\n${C_GREEN}--- Optional: Shell Shortcut ---${C_RESET}\n"
-    read -p "${C_YELLOW}Do you want to create a shell shortcut ${C_GRAY}(alias) ${C_YELLOW}now? ${C_RESET}(${C_CYAN}y${C_RESET}/${C_RED}N${C_RESET}): " config_alias
+    read -rp "${C_YELLOW}Do you want to create a shell shortcut ${C_GRAY}(alias) ${C_YELLOW}now? ${C_RESET}(${C_CYAN}y${C_RESET}/${C_RED}N${C_RESET}): " config_alias
     if [[ "${config_alias,,}" =~ ^(y|Y|yes|YES)$ ]]; then
         configure_shell_alias
     fi
@@ -1125,14 +1125,14 @@ _rollback_app_task() {
     if [[ ! -f "$history_file" ]]; then
         echo -e "${C_RED}No update history found for this app.${C_RESET}"
         echo "History is only created when you run updates via this tool."
-        read -p "Press Enter to return..."
+        read -rp "Press Enter to return..."
         return
     fi
 
     mapfile -t history_lines < <(sed '1!G;h;$!d' "$history_file")
     
     if [ ${#history_lines[@]} -eq 0 ]; then
-        echo -e "${C_YELLOW}History file is empty.${C_RESET}"; read -p "Press Enter..." ; return
+        echo -e "${C_YELLOW}History file is empty.${C_RESET}"; read -rp "Press Enter..." ; return
     fi
 
     echo "Select a previous state to restore:"
@@ -1162,11 +1162,11 @@ _rollback_app_task() {
     if [ ${#valid_choices[@]} -eq 0 ]; then
         echo -e "${C_RED}No locally available images found in history.${C_RESET}"
         echo "The previous versions may have been pruned by a cleanup task."
-        read -p "Press Enter..."
+        read -rp "Press Enter..."
         return
     fi
 
-    read -p "Enter number to rollback to (or 'q' to cancel): " choice
+    read -rp "Enter number to rollback to (or 'q' to cancel): " choice
     if [[ "${choice,,}" == "q" || "${choice,,}" == "Q" ]]; then return; fi
 
     if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#valid_choices[@]}" ]; then
@@ -1174,7 +1174,7 @@ _rollback_app_task() {
         IFS='|' read -r r_time r_name r_id <<< "$selected_line"
 
         echo -e "\n${C_RED}WARNING: This will force '${r_name}' to point to ID '${r_id:7:12}' locally.${C_RESET}"
-        read -p "Are you sure? ${C_RESET}(${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}): " confirm
+        read -rp "Are you sure? ${C_RESET}(${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}): " confirm
         if [[ "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then
             log "Rolling back $app_name image $r_name to $r_id..."
             
@@ -1195,7 +1195,7 @@ _rollback_app_task() {
     else
         echo -e "${C_RED}Invalid selection.${C_RESET}"
     fi
-    read -p "Press Enter to continue..."
+    read -rp "Press Enter to continue..."
 }
 
 app_manager_status() {
@@ -1287,7 +1287,7 @@ app_manager_interactive_handler() {
             3)
                 action="update"; title="Select ${app_type_name} Apps to UPDATE"; task_func="_update_app_task"; menu_action_key="update"
                 echo ""
-                read -p "${C_CYAN}Force recreate containers even if no updates found? ${C_GRAY}(useful for config changes) ${C_RESET}[${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}]: " force_choice
+                read -rp "${C_CYAN}Force recreate containers even if no updates found? ${C_GRAY}(useful for config changes) ${C_RESET}[${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}]: " force_choice
                 if [[ "${force_choice,,}" =~ ^(y|Y|yes|YES)$ ]]; then
                     force_flag="true"
                     title="${title} (FORCE RECREATE)"
@@ -1471,7 +1471,7 @@ ensure_backup_image() {
             fi
         else
             echo -e "${C_YELLOW}The required helper image (${C_CYAN}${BACKUP_IMAGE}${C_YELLOW}) is missing.${C_RESET}\n"
-            read -p "${C_RESET}Download it now? (${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}): " confirm_dl
+            read -rp "${C_RESET}Download it now? (${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}): " confirm_dl
             if [[ "${confirm_dl,,}" =~ ^(y|Y|yes|YES)$ ]]; then
                 echo -e "${C_CYAN}-> Pulling image...${C_RESET}"
                 if ! execute_and_log $SUDO_CMD docker pull "${BACKUP_IMAGE}"; then 
@@ -1498,7 +1498,7 @@ ensure_explore_image() {
              if ! execute_and_log $SUDO_CMD docker pull "${EXPLORE_IMAGE}"; then return 1; fi
         else
             echo -e "${C_YELLOW}The required explorer image (${C_CYAN}${EXPLORE_IMAGE}${C_YELLOW}) is missing.${C_RESET}"
-            read -p "Download it now? ${C_RESET}(${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}): " confirm_dl
+            read -rp "Download it now? ${C_RESET}(${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}): " confirm_dl
             if [[ "${confirm_dl,,}" =~ ^(y|Y|yes|YES)$ ]]; then
                 echo -e "${C_CYAN}-> Pulling image...${C_RESET}"
                 if ! execute_and_log $SUDO_CMD docker pull "${EXPLORE_IMAGE}"; then 
@@ -1764,7 +1764,7 @@ volume_smart_backup_main() {
 
     local create_archive=""
     while true; do
-        read -p $'\n'"${C_CYAN}Do you want to create a password-protected 7z archive of this backup? (${C_GREEN}y${C_CYAN}/${C_RED}N${C_CYAN}): ${C_RESET}" create_archive
+        read -rp $'\n'"${C_CYAN}Do you want to create a password-protected 7z archive of this backup? (${C_GREEN}y${C_CYAN}/${C_RED}N${C_CYAN}): ${C_RESET}" create_archive
         case "${create_archive,,}" in
             y|Y|yes|YES) break ;;
             n|N|no|NO)  echo -e "${C_YELLOW}Skipping 7z archive creation.${C_RESET}"; return ;;
@@ -1790,7 +1790,7 @@ volume_smart_backup_main() {
     if [[ -n "${ENCRYPTED_ARCHIVE_PASSWORD-}" ]]; then
         echo -e "\n${C_CYAN}A default archive password is configured.${C_RESET}"
         while true; do
-            read -p "${C_CYAN}Select: ${C_YELLOW}(U)se saved${C_RESET}, ${C_RESET}(E)nter new, ${C_GRAY}(N)o password${C_RESET}, ${C_RED}(C)ancel${C_RESET}: " pass_choice
+            read -rp "${C_CYAN}Select: ${C_YELLOW}(U)se saved${C_RESET}, ${C_RESET}(E)nter new, ${C_GRAY}(N)o password${C_RESET}, ${C_RED}(C)ancel${C_RESET}: " pass_choice
             case "${pass_choice,,}" in
                 u|U|use|USE)
                     archive_password=$(decrypt_pass "${ENCRYPTED_ARCHIVE_PASSWORD}")
@@ -1822,13 +1822,13 @@ volume_smart_backup_main() {
 
     if ! $password_is_set; then
         while true; do
-            read -sp "Enter password for the archive (leave blank for none): " archive_pass_1; echo
+            read -srp "Enter password for the archive (leave blank for none): " archive_pass_1; echo
             if [[ -z "$archive_pass_1" ]]; then
                 archive_password=""
                 echo -e "${C_YELLOW}Proceeding without a password.${C_RESET}"
                 break
             fi
-            read -sp "Confirm password: " archive_pass_2; echo
+            read -srp "Confirm password: " archive_pass_2; echo
             if [[ "$archive_pass_1" == "$archive_pass_2" ]]; then
                 archive_password="${archive_pass_1}"
                 break
@@ -1846,11 +1846,11 @@ volume_smart_backup_main() {
     echo -e "  2) Semi-Default : ${C_CYAN}Apps-backup(${C_RESET}(User defined)${C_CYAN})[${current_date}].7z ${C_RESET}"
     echo -e "  3) Custom Name  : (User defined)${C_CYAN}.7z${C_RESET}"
     echo -e "  4) Precision    : ${C_CYAN}Apps-backup[${current_date}_HH-MM-SS].7z\n ${C_RESET}"
-    read -p "${C_YELLOW}Select naming convention [${C_RESET}1${C_YELLOW}-${C_RESET}4${C_YELLOW}]: ${C_RESET}" name_choice
+    read -rp "${C_YELLOW}Select naming convention [${C_RESET}1${C_YELLOW}-${C_RESET}4${C_YELLOW}]: ${C_RESET}" name_choice
 
     case "$name_choice" in
         2)
-            read -p "Enter tag name (e.g., 'Plex' or 'Databases'): " tag_name
+            read -rp "Enter tag name (e.g., 'Plex' or 'Databases'): " tag_name
             # Sanitize: Allow only alphanumeric, dash, underscore, dot
             if [[ ! "$tag_name" =~ ^[a-zA-Z0-9._-]+$ ]]; then
                 echo -e "${C_RED}Invalid characters detected. Replaced with safe defaults.${C_RESET}"
@@ -1859,7 +1859,7 @@ volume_smart_backup_main() {
             archive_name="Apps-backup(${tag_name})[${current_date}].7z"
             ;;
         3)
-            read -p "Enter full filename: " custom_name
+            read -rp "Enter full filename: " custom_name
             # Sanitize: Allow only alphanumeric, dash, underscore, dot, parenthesis
             custom_name=$(echo "$custom_name" | tr -cd '[:alnum:]._-()')
             if [[ "${custom_name}" != *.7z ]]; then custom_name="${custom_name}.7z"; fi
@@ -1892,13 +1892,13 @@ volume_smart_backup_main() {
     echo "  4) Custom size (MB or GB)"
     
     while true; do
-        read -p "${C_YELLOW}Enter choice [${C_RESET}1${C_YELLOW}-${C_RESET}4${C_YELLOW}]: ${C_RESET}" split_choice
+        read -rp "${C_YELLOW}Enter choice [${C_RESET}1${C_YELLOW}-${C_RESET}4${C_YELLOW}]: ${C_RESET}" split_choice
         case "$split_choice" in
             1) archive_split_opt=""; break ;;
             2) archive_split_opt="-v4095m"; echo -e "${C_CYAN}-> Splitting at 4GB (FAT32 safe).${C_RESET}"; break ;;
             3) archive_split_opt="-v8192m"; echo -e "${C_CYAN}-> Splitting at 8GB.${C_RESET}"; break ;;
             4) 
-                read -p "${C_YELLOW}Enter size (e.g., ${C_RESET}500m ${C_YELLOW}or ${C_RESET}2g${C_YELLOW}): ${C_RESET}" custom_size
+                read -rp "${C_YELLOW}Enter size (e.g., ${C_RESET}500m ${C_YELLOW}or ${C_RESET}2g${C_YELLOW}): ${C_RESET}" custom_size
                 if [[ "$custom_size" =~ ^[0-9]+[mMgG]$ ]]; then
                     local safe_size="${custom_size,,}"
                     archive_split_opt="-v${safe_size}"
@@ -2190,7 +2190,7 @@ volume_restore_main() {
         return
     fi
     
-    echo -e "\n${C_RED}This will OVERWRITE existing data in corresponding volumes!${C_RESET}"; read -p "Are you sure? ${C_RESET}(${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}): " confirm
+    echo -e "\n${C_RED}This will OVERWRITE existing data in corresponding volumes!${C_RESET}"; read -rp "Are you sure? ${C_RESET}(${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}): " confirm
     if [[ ! "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then echo -e "${C_RED}Restore canceled.${C_RESET}"; return; fi
     
     for backup_file in "${selected_files[@]}"; do
@@ -2334,7 +2334,7 @@ log_remover_main() {
     if [ ${#files_to_delete[@]} -eq 0 ]; then echo -e "\n${C_YELLOW}No logs selected.${C_RESET}"; sleep 1; return; fi
 
     echo -e "\n${C_RED}You are about to permanently delete ${#files_to_delete[@]} log file(s).${C_RESET}"
-    read -p "${C_YELLOW}Are you sure? [${C_RESET}Y${C_YELLOW}/${C_RESET}N${C_YELLOW}]: ${C_RESET}" confirm
+    read -rp "${C_YELLOW}Are you sure? [${C_RESET}Y${C_YELLOW}/${C_RESET}N${C_YELLOW}]: ${C_RESET}" confirm
     if [[ ! "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then echo -e "${C_RED}Deletion canceled.${C_RESET}"; sleep 1; return; fi
     
     echo ""
@@ -2399,7 +2399,7 @@ archive_settings_menu() {
         echo -e " 3) ${C_YELLOW}Return to Previous Menu${C_RESET}"
         echo -e "----------------------------------------------${C_RESET}"
         
-        read -p "Enter choice: " sub_choice
+        read -rp "Enter choice: " sub_choice
         case "$sub_choice" in
             1)
                 echo ""
@@ -2423,7 +2423,7 @@ update_secure_archive_settings() {
     echo -e "${C_GREEN}--- Update Secure Archive Password ---${C_RESET}\n"
 
     if ! ensure_tool_installed "openssl" "openssl" "encrypting passwords"; then
-        read -p "Press Enter to return..."
+        read -rp "Press Enter to return..."
         return
     fi
 
@@ -2431,7 +2431,7 @@ update_secure_archive_settings() {
     local new_hash=""
 
     while true; do
-        read -sp "${C_YELLOW}Enter a new password (leave blank to remove, or type '${C_CYAN}cancel${C_YELLOW}' to exit)${C_RESET}: " archive_pass_1; echo
+        read -srp "${C_YELLOW}Enter a new password (leave blank to remove, or type '${C_CYAN}cancel${C_YELLOW}' to exit)${C_RESET}: " archive_pass_1; echo
         
         if [[ "${archive_pass_1,,}" == "cancel" || "${archive_pass_1,,}" == "CANCEL" ]]; then
             echo -e "\n${C_GRAY}Operation cancelled. No changes were made.${C_RESET}"
@@ -2439,7 +2439,7 @@ update_secure_archive_settings() {
         fi
 
         if [[ -z "$archive_pass_1" ]]; then
-            read -p "${C_RED}You left the password blank. ${C_YELLOW}Remove default encryption? (${C_RED}y${C_YELLOW}/${C_GREEN}N${C_YELLOW}): ${C_RESET}" confirm_remove
+            read -rp "${C_RED}You left the password blank. ${C_YELLOW}Remove default encryption? (${C_RED}y${C_YELLOW}/${C_GREEN}N${C_YELLOW}): ${C_RESET}" confirm_remove
             if [[ "${confirm_remove,,}" =~ ^(y|Y|yes|YES)$ ]]; then
                 new_hash=""
                 break
@@ -2449,7 +2449,7 @@ update_secure_archive_settings() {
             fi
         fi
 
-        read -sp "Confirm new password: " archive_pass_2; echo
+        read -srp "Confirm new password: " archive_pass_2; echo
 
         if [[ "$archive_pass_1" == "$archive_pass_2" ]]; then
             new_hash=$(encrypt_pass "${archive_pass_1}")
@@ -2628,7 +2628,7 @@ _cron_schedule_picker() {
         echo -e "   11) ${C_CYAN}Custom Cron Expression${C_RESET}"
         echo -e "   12) ${C_RED}Cancel${C_RESET}"
         echo
-        read -p "${C_YELLOW}Select schedule: ${C_RESET}" choice
+        read -rp "${C_YELLOW}Select schedule: ${C_RESET}" choice
         
         local sched=""
         case $choice in
@@ -2643,7 +2643,7 @@ _cron_schedule_picker() {
             9) sched="0 3 * * 6" ;;
             10) sched="0 4 1 * *" ;;
             11) 
-                read -p "Enter custom format (e.g. '30 5 * * *'): " custom_in
+                read -rp "Enter custom format (e.g. '30 5 * * *'): " custom_in
                 if [[ -n "$custom_in" ]]; then sched="$custom_in"; fi 
                 ;;
             12) return 1 ;;
@@ -2684,7 +2684,7 @@ scheduler_menu() {
         )
 
         print_standard_menu "Scheduler Manager (Root)" scheduler_options "RQ"
-        read -p "${C_YELLOW}Select task to configure: ${C_RESET}" choice
+        read -rp "${C_YELLOW}Select task to configure: ${C_RESET}" choice
 
         local target_cmd=""
         local target_id=""
@@ -2715,7 +2715,7 @@ scheduler_menu() {
             echo -e "1) ${C_GREEN}Update Schedule${C_RESET}"
             echo -e "2) ${C_RED}Remove Task${C_RESET}"
             echo -e "3) ${C_GRAY}Cancel${C_RESET}\n${C_RESET}"
-            read -p "Choice: " sub_choice
+            read -rp "Choice: " sub_choice
             case "$sub_choice" in
                 1) 
                     local new_sched
@@ -2732,7 +2732,7 @@ scheduler_menu() {
             esac
         else
             echo -e "${C_YELLOW}Task is currently ${C_RED}disabled${C_YELLOW}.${C_RESET}\n"
-            read -p "${C_CYAN}Do you want to enable it? ${C_RESET}(${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}): " enable_opt
+            read -rp "${C_CYAN}Do you want to enable it? ${C_RESET}(${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}): " enable_opt
             if [[ "${enable_opt,,}" =~ ^(y|yes)$ ]]; then
                 local new_sched
                 if _cron_schedule_picker "$task_name" new_sched; then
@@ -2777,7 +2777,7 @@ image_healthcheck_main() {
                     _check_single_image_health "$img"
                 done
                 echo
-                read -p "${C_GRAY}Press Enter to return...${C_RESET}"
+                read -rp "${C_GRAY}Press Enter to return...${C_RESET}"
                 ;;
             2)
                 echo -e "\n${C_YELLOW}Loading local images...${C_RESET}"
@@ -2805,14 +2805,14 @@ image_healthcheck_main() {
                 done
                 
                 if [[ "$REPLY" != "q" && "$REPLY" != "Q" ]]; then
-                    read -p "${C_GRAY}Press Enter to return...${C_RESET}"
+                    read -rp "${C_GRAY}Press Enter to return...${C_RESET}"
                 fi
                 ;;
             3)
                 echo
                 while true; do
                     echo -e "${C_YELLOW}This will pull from registry if not found locally${C_RESET}"
-                    read -e -p "${C_CYAN}Enter image name ${C_GRAY}(e.g. nginx:latest)${C_RESET}: " custom_img
+                    read -e -r -p "${C_CYAN}Enter image name ${C_GRAY}(e.g. nginx:latest)${C_RESET}: " custom_img
 
                     if [[ -z "$custom_img" ]]; then break; fi
 
@@ -2879,7 +2879,7 @@ image_healthcheck_main() {
                 done
                 
                 echo
-                read -p "Press Enter to return..."
+                read -rp "Press Enter to return..."
                 ;;
             [rR]) return ;;
             [qQ]) log "Exiting script." "${C_GRAY}Exiting.${C_RESET}"; exit 0 ;;
@@ -2932,7 +2932,7 @@ _update_config_value() {
 
     local new_value
     while true; do
-        read -e -i "${current_value}" -p "$prompt_text: " input_val
+        read -e -r -i "${current_value}" -p "$prompt_text: " input_val
 
         if [[ -n "$default_value" && "${input_val,,}" == "reset" ]]; then
             new_value="$default_value"
