@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.5.4.2
+SCRIPT_VERSION=v1.5.4.3
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -104,14 +104,13 @@ load_config() {
     fi
 
     # Source and clean up
+    # shellcheck source=/dev/null
     . "$tmp_log"
     rm -f "$tmp_log"
     tmp_log=""
 }
 
 validate_loaded_config() {
-    local config_changed=false
-
     # Validate Retention (Integer, 0 to 3650)
     if [[ ! "${LOG_RETENTION_DAYS}" =~ ^[0-9]+$ ]] || [ "${LOG_RETENTION_DAYS}" -gt 3650 ]; then
         echo -e "${C_RED}Warning: Invalid LOG_RETENTION_DAYS detected ('${LOG_RETENTION_DAYS}').${C_RESET}"
@@ -201,7 +200,8 @@ _record_image_state() {
 
     if [[ "$image_id" == "not_found" || -z "$image_id" ]]; then return; fi
 
-    local entry="$(date +'%Y-%m-%d %H:%M:%S')|${image_name}|${image_id}"
+    local entry
+    entry="$(date +'%Y-%m-%d %H:%M:%S')|${image_name}|${image_id}"
     
     local last_entry
     if [[ -f "$history_file" ]]; then
@@ -213,7 +213,7 @@ _record_image_state() {
 
     echo "$entry" >> "$history_file"
 
-    if [ $(wc -l < "$history_file") -gt 50 ]; then
+    if [ "$(wc -l < "$history_file")" -gt 50 ]; then
         local temp_hist; temp_hist=$(mktemp)
         tail -n 50 "$history_file" > "$temp_hist"
         mv "$temp_hist" "$history_file"
@@ -223,8 +223,10 @@ _record_image_state() {
 _enable_cron_logging() {
     local subdir="$1"
     local prefix="$2"
+    # shellcheck disable=SC2153 (We want to use the global LOG_DIR variable here, which is set in the config and loaded before this function is called.)
     local target_dir="${LOG_DIR}/${subdir}"
-    local current_date=$(date +'%Y-%m-%d')
+    local current_date
+    current_date=$(date +'%Y-%m-%d')
     local new_log_file="${target_dir}/${prefix}-${current_date}.log"
 
     if [ ! -d "$target_dir" ]; then
@@ -964,6 +966,8 @@ _start_app_task() {
     if ! validate_and_edit_compose "$app_name" "$compose_file"; then return; fi
 
     log "Starting containers for '$app_name' (Args: ${extra_args:-none})..."
+
+    # shellcheck disable=SC2086 (We want word splitting for extra_args to allow multiple flags)
     if execute_and_log $SUDO_CMD docker compose -f "$compose_file" up -d $extra_args; then
         log "Successfully started '$app_name'."
         echo -e "${C_GREEN}Successfully started '${C_CYAN}$app_name${C_GREEN}'.${C_RESET}"
@@ -1022,7 +1026,7 @@ _update_app_task() {
         log "No images defined in compose file for $app_name."
     else
         for image in "${all_app_images[@]}"; do
-            if [[ " ${IGNORED_IMAGES[*]-} " =~ " ${image} " ]]; then
+            if [[ " ${IGNORED_IMAGES[*]-} " == *" ${image} "* ]]; then
                 log "Skipping ignored image: $image" "   -> Skipping ignored image: ${C_GRAY}${image}${C_RESET}"
             else
                 images_to_pull+=("$image")
@@ -1430,6 +1434,7 @@ app_manager_menu() {
             2) app_manager_interactive_handler "Essential" "$APPS_BASE_PATH" "$APPS_BASE_PATH" ;;
             3) app_manager_interactive_handler "Managed" "$APPS_BASE_PATH/$MANAGED_SUBDIR" "$APPS_BASE_PATH/$MANAGED_SUBDIR" ;;
             4) 
+                # shellcheck disable=SC2059 (We want printf to interpret the color codes here)
                 read -rp "$(printf "\n${C_RED}This will stop ALL running compose applications. Are you sure? ${C_RESET}[${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}]: ${C_RESET}")" confirm
                 if [[ "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then
                     app_manager_stop_all
@@ -1531,6 +1536,7 @@ volume_checker_explore() {
     echo -e "${C_YELLOW}The volume ${C_CYAN}${volume_name} ${C_YELLOW}is mounted read-write at ${C_CYAN}/volume${C_YELLOW}."
     echo -e "${C_YELLOW}Type ${C_GREEN}'exit' ${C_YELLOW}or press ${C_GREEN}Ctrl+D ${C_YELLOW}to return.${C_RESET}\n"
 
+    # shellcheck disable=SC2016 (We want the variables to be evaluated inside the container, not here)
     $SUDO_CMD docker run --rm -it \
         -e TERM="$TERM" \
         -v "${volume_name}:/volume" \
@@ -1642,7 +1648,7 @@ volume_smart_backup_main() {
     ensure_backup_image || volume_manager_menu
 
     mapfile -t all_volumes < <($SUDO_CMD docker volume ls --format "{{.Name}}"); local -a filtered_volumes=()
-    for volume in "${all_volumes[@]}"; do if [[ ! " ${IGNORED_VOLUMES[*]-} " =~ " ${volume} " ]]; then filtered_volumes+=("$volume"); fi; done
+    for volume in "${all_volumes[@]}"; do if [[ ! " ${IGNORED_VOLUMES[*]-} " == *" ${volume} "* ]]; then filtered_volumes+=("$volume"); fi; done
     if [[ ${#filtered_volumes[@]} -eq 0 ]]; then echo -e "${C_YELLOW}No available volumes to back up.${C_RESET}"; sleep 2; return; fi
 
     local -a selected_status=(); for ((i=0; i<${#filtered_volumes[@]}; i++)); do selected_status+=("true"); done
@@ -1688,7 +1694,9 @@ volume_smart_backup_main() {
         fi
     done
 
-    local backup_dir="${BACKUP_LOCATION%/}/$(date +'%Y-%m-%d_%H-%M-%S')"; mkdir -p "$backup_dir"
+    local backup_dir
+    backup_dir="${BACKUP_LOCATION%/}/$(date +'%Y-%m-%d_%H-%M-%S')"
+    mkdir -p "$backup_dir"
 
     if [ -n "${!app_volumes_map[*]}" ]; then
         echo -e "\n${C_GREEN}--- Processing Application-Linked Backups ---${C_RESET}"
@@ -1811,7 +1819,8 @@ volume_smart_backup_main() {
         done
     fi
 
-    local current_date=$(date +'%Y-%m-%d')
+    local current_date
+    current_date=$(date +'%Y-%m-%d')
     local archive_name=""
     
     echo -e "\n${C_YELLOW}--- Archive Naming ---${C_RESET}"
@@ -1846,7 +1855,8 @@ volume_smart_backup_main() {
             ;;
     esac
 
-    local archive_path="$(dirname "$backup_dir")/${archive_name}"
+    local archive_path
+    archive_path="$(dirname "$backup_dir")/${archive_name}"
 
     if [[ -f "$archive_path" ]] || [[ -f "${archive_path%.7z}.part1.7z" ]]; then
         echo -e "${C_YELLOW}File '${archive_name}' already exists. Appending timestamp...${C_RESET}"
@@ -2042,8 +2052,10 @@ quick_backup_handler() {
     
     # Normalize path (handles ../, ./, and double slashes)
     backup_root=$(realpath -m "$backup_root")
-    local current_ts=$(date +'%Y-%m-%d_%H-%M-%S')
-    local backup_dir="${backup_root}/${current_ts}"
+    local current_ts
+    current_ts=$(date +'%Y-%m-%d_%H-%M-%S')
+    local backup_dir
+    backup_dir="${backup_root}/${current_ts}"
 
     echo -e "${C_YELLOW}--- Quick Backup Started ---${C_RESET}"
     echo -e "Destination: ${C_CYAN}${backup_dir}${C_RESET}"
@@ -2203,6 +2215,7 @@ volume_manager_menu() {
     done
 }
 
+# shellcheck disable=SC2059 (We want printf-style formatting in the prompt)
 system_prune_main() {
     check_root
     clear
@@ -2982,7 +2995,7 @@ update_ignored_items() {
 
     local -a selected_status=()
     for item in "${all_available_items[@]}"; do
-        if [[ " ${ignored_items_ref[*]} " =~ " ${item} " ]]; then
+        if [[ " ${ignored_items_ref[*]} " == *" ${item} "* ]]; then
             selected_status+=("true")
         else
             selected_status+=("false")
@@ -3088,7 +3101,8 @@ settings_manager_menu() {
                 echo -e "\nPress Enter to return..."; read -r
                 ;;
             4)
-                local -a all_images; mapfile -t all_images < <($SUDO_CMD docker image ls --format "{{.Repository}}:{{.Tag}}" | grep -v "<none>" | sort)
+                local -a all_images
+                mapfile -t all_images < <($SUDO_CMD docker image ls --format "{{.Repository}}:{{.Tag}}" | grep -v "<none>" | sort)
                 update_ignored_items "Images" "all_images" "IGNORED_IMAGES"
                 echo -e "\nPress Enter to return..."; read -r
                 ;;
