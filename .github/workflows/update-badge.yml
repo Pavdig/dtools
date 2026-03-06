@@ -1,0 +1,42 @@
+name: Update README Version Badge
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ 'docker_tool_suite.sh' ]
+
+jobs:
+  update-readme:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract version and update README
+        run: |
+          # Matches SCRIPT_VERSION=v1.2.3 and extracts v1.2.3
+          RAW_VERSION=$(grep -oP '^SCRIPT_VERSION=\K.*' docker_tool_suite.sh)
+          
+          if [ -z "$RAW_VERSION" ]; then
+            echo "Error: Could not find SCRIPT_VERSION in docker_tool_suite.sh!"
+            exit 1
+          fi
+          
+          echo "Detected version: $RAW_VERSION"
+
+          # Updates the version badge in README.md
+          # It looks for 'version-ANYTHING-blue' and replaces 'ANYTHING' with the new version
+          sed -i -E "s|(version-)[^ ]+(-blue)|\1${RAW_VERSION}\2|g" README.md
+
+      - name: Commit and push changes
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add README.md
+          if ! git diff --staged --quiet; then
+            git commit -m "docs: bump version badge to ${RAW_VERSION}"
+            git push
+          fi
