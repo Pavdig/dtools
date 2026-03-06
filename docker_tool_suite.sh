@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.5.4.3
+SCRIPT_VERSION=v1.5.4.4
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -104,7 +104,6 @@ load_config() {
     fi
 
     # Source and clean up
-    # shellcheck source=/dev/null
     . "$tmp_log"
     rm -f "$tmp_log"
     tmp_log=""
@@ -223,7 +222,6 @@ _record_image_state() {
 _enable_cron_logging() {
     local subdir="$1"
     local prefix="$2"
-    # shellcheck disable=SC2153 (We want to use the global LOG_DIR variable here, which is set in the config and loaded before this function is called.)
     local target_dir="${LOG_DIR}/${subdir}"
     local current_date
     current_date=$(date +'%Y-%m-%d')
@@ -967,7 +965,6 @@ _start_app_task() {
 
     log "Starting containers for '$app_name' (Args: ${extra_args:-none})..."
 
-    # shellcheck disable=SC2086 (We want word splitting for extra_args to allow multiple flags)
     if execute_and_log $SUDO_CMD docker compose -f "$compose_file" up -d $extra_args; then
         log "Successfully started '$app_name'."
         echo -e "${C_GREEN}Successfully started '${C_CYAN}$app_name${C_GREEN}'.${C_RESET}"
@@ -1160,7 +1157,7 @@ _rollback_app_task() {
 
     if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#valid_choices[@]}" ]; then
         local selected_line="${valid_choices[$((choice-1))]}"
-        IFS='|' read -r r_time r_name r_id <<< "$selected_line"
+        IFS='|' read -r _ r_name r_id <<< "$selected_line"
 
         echo -e "\n${C_RED}WARNING: This will force '${r_name}' to point to ID '${r_id:7:12}' locally.${C_RESET}"
         read -rp "Are you sure? ${C_RESET}(${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}): " confirm
@@ -1434,7 +1431,6 @@ app_manager_menu() {
             2) app_manager_interactive_handler "Essential" "$APPS_BASE_PATH" "$APPS_BASE_PATH" ;;
             3) app_manager_interactive_handler "Managed" "$APPS_BASE_PATH/$MANAGED_SUBDIR" "$APPS_BASE_PATH/$MANAGED_SUBDIR" ;;
             4) 
-                # shellcheck disable=SC2059 (We want printf to interpret the color codes here)
                 read -rp "$(printf "\n${C_RED}This will stop ALL running compose applications. Are you sure? ${C_RESET}[${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}]: ${C_RESET}")" confirm
                 if [[ "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then
                     app_manager_stop_all
@@ -1536,7 +1532,6 @@ volume_checker_explore() {
     echo -e "${C_YELLOW}The volume ${C_CYAN}${volume_name} ${C_YELLOW}is mounted read-write at ${C_CYAN}/volume${C_YELLOW}."
     echo -e "${C_YELLOW}Type ${C_GREEN}'exit' ${C_YELLOW}or press ${C_GREEN}Ctrl+D ${C_YELLOW}to return.${C_RESET}\n"
 
-    # shellcheck disable=SC2016 (We want the variables to be evaluated inside the container, not here)
     $SUDO_CMD docker run --rm -it \
         -e TERM="$TERM" \
         -v "${volume_name}:/volume" \
@@ -2215,7 +2210,6 @@ volume_manager_menu() {
     done
 }
 
-# shellcheck disable=SC2059 (We want printf-style formatting in the prompt)
 system_prune_main() {
     check_root
     clear
