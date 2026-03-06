@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.5.4.5
+SCRIPT_VERSION=v1.5.4.6
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -135,6 +135,19 @@ validate_loaded_config() {
 CONFIG_DIR="/home/${CURRENT_USER}/.config/dtools"
 CONFIG_FILE="${CONFIG_DIR}/config.conf"
 
+# --- Helper: Pattern Matching ---
+_is_item_ignored() {
+    local item="$1"
+    local -n ignore_list_ref="$2"
+    for pattern in "${ignore_list_ref[@]}"; do
+        # The right side is intentionally unquoted to allow bash globbing (wildcards)
+        if [[ "$item" == $pattern ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 # --- SHARED UI FUNCTION ---
 print_standard_menu() {
     local title="$1"
@@ -245,12 +258,12 @@ _enable_cron_logging() {
 
 check_root() {
     if [[ $EUID -ne 0 ]]; then
-        echo -e "${C_YELLOW}This action requires root privileges. Please enter your password.${C_RESET}"
+        echo -e "\n${C_YELLOW}This action requires root privileges. Please enter your password.${C_RESET}"
         if ! sudo -v; then
-            echo -e "${C_RED}Authentication failed. Aborting.${C_RESET}" >&2
+            echo -e "\n${C_RED}Authentication failed. Aborting.${C_RESET}" >&2
             exit 1
         fi
-        echo -e "${C_GREEN}Authentication successful.${C_RESET}\n"
+        echo -e "\n${C_GREEN}Authentication successful.${C_RESET}\n"
     fi
 }
 
@@ -1024,7 +1037,7 @@ _update_app_task() {
         log "No images defined in compose file for $app_name."
     else
         for image in "${all_app_images[@]}"; do
-            if [[ " ${IGNORED_IMAGES[*]-} " == *" ${image} "* ]]; then
+            if _is_item_ignored "$image" IGNORED_IMAGES; then
                 log "Skipping ignored image: $image" "   -> Skipping ignored image: ${C_GRAY}${image}${C_RESET}"
             else
                 images_to_pull+=("$image")
@@ -1656,7 +1669,7 @@ volume_smart_backup_main() {
     ensure_backup_image || volume_manager_menu
 
     mapfile -t all_volumes < <($SUDO_CMD docker volume ls --format "{{.Name}}"); local -a filtered_volumes=()
-    for volume in "${all_volumes[@]}"; do if [[ ! " ${IGNORED_VOLUMES[*]-} " == *" ${volume} "* ]]; then filtered_volumes+=("$volume"); fi; done
+    for volume in "${all_volumes[@]}"; do if ! _is_item_ignored "$volume" IGNORED_VOLUMES; then filtered_volumes+=("$volume"); fi; done
     if [[ ${#filtered_volumes[@]} -eq 0 ]]; then echo -e "${C_YELLOW}No available volumes to back up.${C_RESET}"; sleep 2; return; fi
 
     local -a selected_status=(); for ((i=0; i<${#filtered_volumes[@]}; i++)); do selected_status+=("true"); done
@@ -1745,6 +1758,14 @@ volume_smart_backup_main() {
             echo -e "${C_YELLOW}Backing up standalone volume: ${C_CYAN}${volume}${C_RESET}..."
             execute_and_log $SUDO_CMD docker run --rm -v "${volume}:/volume:ro" -v "${backup_dir}:/backup" "${BACKUP_IMAGE}" tar -C /volume --zstd -cf "/backup/${volume}.tar.zst" .
         done
+    fi
+
+    # Check for empty backup directory
+    if [[ -z "$($SUDO_CMD ls -A "$backup_dir")" ]]; then
+        echo -e "\n${C_YELLOW}No volumes were successfully backed up. ${C_GRAY}(all were empty, skipped, or failed)${C_RESET}"
+        echo -e "${C_GRAY}-> Cleaning up empty directory: ${backup_dir}${C_RESET}"
+        $SUDO_CMD rm -rf "$backup_dir"
+        return
     fi
 
     echo -e "\n${C_YELLOW}Changing ownership to '${CURRENT_USER}'...${C_RESET}"
@@ -2145,6 +2166,14 @@ quick_backup_handler() {
         $SUDO_CMD docker run --rm -v "${volume}:/volume:ro" -v "${backup_dir}:/backup" "${BACKUP_IMAGE}" tar -C /volume --zstd -cf "/backup/${volume}.tar.zst" .
     done
 
+    # Check for empty backup directory
+    if [[ -z "$($SUDO_CMD ls -A "$backup_dir")" ]]; then
+        echo -e "\n${C_YELLOW}No backups were created.${C_RESET}"
+        echo -e "${C_GRAY}-> Cleaning up empty directory: ${backup_dir}${C_RESET}"
+        $SUDO_CMD rm -rf "$backup_dir"
+        exit 0
+    fi
+
     # Set ownership of backup files to current user
     $SUDO_CMD chown -R "${CURRENT_USER}:${CURRENT_USER}" "$backup_dir"
     echo -e "\n${C_GREEN}${TICKMARK} Quick backup complete!${C_RESET}"
@@ -2470,13 +2499,6 @@ update_unused_images_main() {
     log "--- Starting unused image update script. ---" "${C_GREEN}--- Starting Unused Docker Image Updater ---${C_RESET}"
     if $DRY_RUN; then log "--- Starting in Dry Run mode. No changes will be made. ---" "${C_GRAY}[DRY RUN] No changes will be made.${C_RESET}"; fi
 
-    local ignored_pattern
-    if [[ ${#IGNORED_IMAGES[@]} -gt 0 ]]; then
-        ignored_pattern=$(IFS="|"; echo "${IGNORED_IMAGES[*]}")
-    else
-        ignored_pattern="^$"
-    fi
-
     local total_images_scanned=0 used_count=0 ignored_count=0 unpullable_count=0
 
     log "Finding images used by existing containers (running or stopped)..." "${C_GRAY} -> Finding images used by existing containers...${C_RESET}"
@@ -2495,7 +2517,7 @@ update_unused_images_main() {
             continue
         fi
         
-        if [[ ${#IGNORED_IMAGES[@]} -gt 0 ]] && echo "$image_name" | grep -qE "$ignored_pattern"; then
+        if _is_item_ignored "$image_name" IGNORED_IMAGES; then
             log "Skipping ignored image: $image_name"
             ignored_count=$((ignored_count + 1))
             continue
@@ -3002,7 +3024,7 @@ update_ignored_items() {
 
     local -a selected_status=()
     for item in "${all_available_items[@]}"; do
-        if [[ " ${ignored_items_ref[*]} " == *" ${item} "* ]]; then
+        if _is_item_ignored "$item" ignored_items_ref; then
             selected_status+=("true")
         else
             selected_status+=("false")
