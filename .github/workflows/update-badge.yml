@@ -17,7 +17,6 @@ jobs:
 
       - name: Extract version and update README
         run: |
-          # Matches SCRIPT_VERSION=v1.2.3 and extracts v1.2.3
           RAW_VERSION=$(grep -oP '^SCRIPT_VERSION=\K.*' docker_tool_suite.sh)
           
           if [ -z "$RAW_VERSION" ]; then
@@ -26,9 +25,6 @@ jobs:
           fi
           
           echo "Detected version: $RAW_VERSION"
-
-          # Updates the version badge in README.md
-          # It looks for 'version-ANYTHING-blue' and replaces 'ANYTHING' with the new version
           sed -i -E "s|(version-)[^ ]+(-blue)|\1${RAW_VERSION}\2|g" README.md
 
       - name: Commit and push changes
@@ -37,6 +33,6 @@ jobs:
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add README.md
           if ! git diff --staged --quiet; then
-            git commit -m "docs: bump version badge to ${RAW_VERSION}"
+            git commit -m "README.md/update: bumping version badge to ${RAW_VERSION}"
             git push
           fi
