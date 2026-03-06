@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.5.4.4
+SCRIPT_VERSION=v1.5.4.5
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -362,7 +362,8 @@ show_selection_menu() {
                     if $status; then any_selected=true; break; fi
                 done
                 if ! $any_selected; then
-                    echo -e "${C_YELLOW}No items selected. Press Enter to continue...${C_RESET}"; read -r
+                    echo -e "\n${C_YELLOW}No items selected. Try again.${C_RESET}"
+                    sleep 2
                     continue
                 fi
                 return 0
@@ -372,13 +373,13 @@ show_selection_menu() {
             [aA])
                 local all_selected=true; for status in "${selected_status_ref[@]}"; do if ! $status; then all_selected=false; break; fi; done
                 local new_status; new_status=$(if $all_selected; then echo "false"; else echo "true"; fi)
-                for i in "${!selected_status_ref[@]}"; do selected_status_ref[$i]=$new_status; done ;;
+                for i in "${!selected_status_ref[@]}"; do selected_status_ref[i]=$new_status; done ;;
             *)
                 if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#all_items_ref[@]}" ]; then
                     local index=$((choice-1))
-                    if ${selected_status_ref[$index]}; then selected_status_ref[$index]=false; else selected_status_ref[$index]=true; fi
+                    if ${selected_status_ref[$index]}; then selected_status_ref[index]=false; else selected_status_ref[index]=true; fi
                 else
-                    echo -e "${C_RED}Invalid input. Press Enter to continue...${C_RESET}"; read -r
+                    echo -e "\n${C_RED}Invalid input. Try again.${C_RESET}"; sleep 2
                 fi ;;
         esac
     done
@@ -1106,69 +1107,81 @@ _rollback_app_task() {
     local history_file="${app_dir}/.update_history"
     
     clear
-    echo -e "${C_YELLOW}--- Rollback Wizard for ${app_name} ---${C_RESET}"
+    echo -e "${C_GREEN}--- Rollback Wizard for ${C_CYAN}${app_name} ${C_GREEN}---${C_RESET}"
     
     if [[ ! -f "$history_file" ]]; then
-        echo -e "${C_RED}No update history found for this app.${C_RESET}"
-        echo "History is only created when you run updates via this tool."
+        echo -e "\n${C_RED}No update history found for this app.${C_RESET}\n"
         read -rp "Press Enter to return..."
         return
     fi
-
-    mapfile -t history_lines < <(sed '1!G;h;$!d' "$history_file")
     
-    if [ ${#history_lines[@]} -eq 0 ]; then
+    # Check if file has content
+    if [[ ! -s "$history_file" ]]; then
         echo -e "${C_YELLOW}History file is empty.${C_RESET}"; read -rp "Press Enter..." ; return
     fi
-
-    echo "Select a previous state to restore:"
-    echo "----------------------------------------------------------------"
+    
+    echo -e "\n${C_YELLOW}Select a previous state to restore:${C_RESET}"
+    echo "---------------------------------------------------------------------------"
     printf "%-4s | %-20s | %-30s | %s\n" "No." "Date" "Image Name" "ID (Hash)"
-    echo "----------------------------------------------------------------"
-
+    echo "---------------------------------------------------------------------------"
+    
     local -a valid_choices=()
     local display_count=0
     
-    for line in "${history_lines[@]}"; do
-        IFS='|' read -r timestamp img_name img_id <<< "$line"
+    # Use tac to read in reverse, fallback to sed if tac is missing
+    local reader_cmd
+    if command -v tac >/dev/null; then reader_cmd="tac"; else reader_cmd="sed '1!G;h;$!d'"; fi
+    
+    # Read file line by line
+    while IFS='|' read -r timestamp img_name img_id || [[ -n "$timestamp" ]]; do
+        # Skip empty or malformed lines
+        [[ -z "$img_id" ]] && continue
         
+        # Clean variables
+        timestamp=$(echo "$timestamp" | tr -d '\r' | xargs)
+        img_name=$(echo "$img_name" | tr -d '\r' | xargs)
+        img_id=$(echo "$img_id" | tr -d '\r' | xargs)
+        
+        # Verify the image still exists locally. 
         if $SUDO_CMD docker image inspect "$img_id" &>/dev/null; then
             local short_id="${img_id:7:12}"
-            printf "%-4s | %-20s | %-30s | %s\n" "$((display_count+1))" "$timestamp" "${img_name:0:28}.." "$short_id"
-            valid_choices+=("$line")
-            ((display_count++))
-        else
-            continue
+            printf "%-4s | %-20s | %-30s | %s\n" "$((display_count+1))" "$timestamp" "${img_name:0:28}" "$short_id"
+            
+            # Store original raw line for later use
+            valid_choices+=("$timestamp|$img_name|$img_id")
+            ((++display_count)) || true
         fi
-
+        
         if [ $display_count -ge 10 ]; then break; fi
-    done
-    echo "----------------------------------------------------------------"
+        
+    done < <(eval "$reader_cmd \"$history_file\"")
 
     if [ ${#valid_choices[@]} -eq 0 ]; then
-        echo -e "${C_RED}No locally available images found in history.${C_RESET}"
-        echo "The previous versions may have been pruned by a cleanup task."
+        echo -e "\n${C_RED}No locally available images found in history.${C_RESET}\n"
         read -rp "Press Enter..."
         return
     fi
 
-    read -rp "Enter number to rollback to (or 'q' to cancel): " choice
-    if [[ "${choice,,}" == "q" || "${choice,,}" == "Q" ]]; then return; fi
-
+    echo -e "\n---------------------------------------------------------------------------"
+    read -rp "${C_YELLOW}Enter number to rollback to ${C_GRAY}(or '${C_RED}q${C_GRAY}' to cancel)${C_RESET}: " choice
+    if [[ "${choice,,}" == "q" ]]; then return; fi
+    
     if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#valid_choices[@]}" ]; then
         local selected_line="${valid_choices[$((choice-1))]}"
         IFS='|' read -r _ r_name r_id <<< "$selected_line"
-
-        echo -e "\n${C_RED}WARNING: This will force '${r_name}' to point to ID '${r_id:7:12}' locally.${C_RESET}"
-        read -rp "Are you sure? ${C_RESET}(${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}): " confirm
-        if [[ "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then
+        
+        echo -e "\n${C_RED}WARNING: This will force '${C_RESET}${r_name}${C_RED}' to point to ID '${C_RESET}${r_id:7:12}${C_RED}' locally!${C_RESET}\n"
+        read -rp "${C_YELLOW}Are you sure? (${C_GREEN}y${C_RESET}/${C_RED}N${C_RESET}): ${C_RESET}" confirm
+        
+        if [[ "${confirm,,}" =~ ^(y|yes)$ ]]; then
             log "Rolling back $app_name image $r_name to $r_id..."
             
             if execute_and_log $SUDO_CMD docker tag "$r_id" "$r_name"; then
                 echo -e "${C_GREEN}Image successfully retagged.${C_RESET}"
                 echo "Restarting application to apply change..."
-                _stop_app_task "$app_name" "$app_dir"
-                _start_app_task "$app_name" "$app_dir" "--force-recreate"
+                
+                _stop_app_task "$app_name" "$app_dir" || true
+                _start_app_task "$app_name" "$app_dir" "--force-recreate" || true
                 
                 echo -e "\n${C_GREEN}${TICKMARK} Rollback complete.${C_RESET}"
                 log "Rollback successful for $r_name."
@@ -1176,10 +1189,10 @@ _rollback_app_task() {
                 echo -e "${C_RED}Error: Failed to retag image.${C_RESET}"
             fi
         else
-            echo "Rollback canceled."
+            echo -e "\n${C_RED}Rollback canceled by user!${C_RESET}\n"
         fi
     else
-        echo -e "${C_RED}Invalid selection.${C_RESET}"
+        echo -e "\n${C_RED}Invalid selection.${C_RESET}\n"
     fi
     read -rp "Press Enter to continue..."
 }
@@ -2659,7 +2672,7 @@ scheduler_menu() {
             "${C_RESET}Unused Image Update  $status_unused"
         )
 
-        print_standard_menu "Scheduler Manager (Root)" scheduler_options "RQ"
+        print_standard_menu "Scheduler Manager ${C_RED}(Root)${C_RESET}" scheduler_options "RQ"
         read -rp "${C_YELLOW}Select task to configure: ${C_RESET}" choice
 
         local target_cmd=""
