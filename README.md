@@ -1,3 +1,11 @@
+![Docker](https://img.shields.io/badge/Manages-Docker-2496ED?logo=docker&logoColor=white)
+![Bash](https://img.shields.io/badge/Language-Bash-4EAA25?logo=gnu-bash&logoColor=white)
+[![Version](https://img.shields.io/badge/version-1.5.4-blue)](https://github.com/Pavdig/dtools)
+[![ShellCheck](https://github.com/Pavdig/dtools/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/Pavdig/dtools/actions)
+[![GitHub last commit](https://img.shields.io/github/last-commit/Pavdig/dtools)](https://github.com/Pavdig/dtools/commits/main)
+[![GitHub repo size](https://img.shields.io/github/repo-size/Pavdig/dtools)](https://github.com/Pavdig/dtools)
+[![License](https://img.shields.io/github/license/Pavdig/dtools)](https://github.com/Pavdig/dtools/blob/main/LICENSE)
+
 # Docker Tool Suite (dtools)
 
 A Bash script with a Text User Interface (TUI) to simplify managing Docker Compose applications, backups, and updates on Linux servers.
