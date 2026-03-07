@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.5.4.6
+SCRIPT_VERSION=v1.5.4.7
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -1774,11 +1774,12 @@ volume_smart_backup_main() {
 
     local create_archive=""
     while true; do
-        read -rp $'\n'"${C_CYAN}Do you want to create a password-protected 7z archive of this backup? (${C_GREEN}y${C_CYAN}/${C_RED}N${C_CYAN}): ${C_RESET}" create_archive
+        read -rp $'\n'"${C_CYAN}Do you want to create a 7z archive of this backup? (${C_GREEN}y${C_CYAN}/${C_RED}N${C_CYAN}): ${C_RESET}" create_archive
         case "${create_archive,,}" in
             y|Y|yes|YES) break ;;
             n|N|no|NO)  echo -e "${C_YELLOW}Skipping 7z archive creation.${C_RESET}"; return ;;
-            *)     echo -e "${C_RED}Invalid input. Please enter Y/YES or N/NO.${C_RESET}" ;;
+            *)  echo -e "${C_RED}Invalid input!${C_RESET}";
+                echo -e "${C_YELLOW}Please enter ${C_GREEN}y${C_YELLOW} or ${C_RED}N${C_YELLOW}.${C_RESET}" ;;
         esac
     done
 
@@ -1798,7 +1799,7 @@ volume_smart_backup_main() {
     local password_is_set=false
 
     if [[ -n "${ENCRYPTED_ARCHIVE_PASSWORD-}" ]]; then
-        echo -e "\n${C_CYAN}A default archive password is configured.${C_RESET}"
+        echo -e "\n${C_YELLOW}A default archive password is configured.${C_RESET}"
         while true; do
             read -rp "${C_CYAN}Select: ${C_YELLOW}(U)se saved${C_RESET}, ${C_RESET}(E)nter new, ${C_GRAY}(N)o password${C_RESET}, ${C_RED}(C)ancel${C_RESET}: " pass_choice
             case "${pass_choice,,}" in
@@ -1870,11 +1871,15 @@ volume_smart_backup_main() {
             archive_name="Apps-backup(${tag_name})[${current_date}].7z"
             ;;
         3)
-            read -rp "Enter full filename: " custom_name
-            # Sanitize: Allow only alphanumeric, dash, underscore, dot, parenthesis
-            custom_name=$(echo "$custom_name" | tr -cd '[:alnum:]._-()')
-            if [[ "${custom_name}" != *.7z ]]; then custom_name="${custom_name}.7z"; fi
-            archive_name="$custom_name"
+            read -rp "Enter full filename: " custom_input
+            # Remove potentially dangerous characters
+            CLEAN_NAME=$(echo "$custom_input" | tr -cd '[:alnum:]_(). -')
+
+            if [[ -z "$CLEAN_NAME" ]]; then
+                echo -e "${C_RED}Error: Filename cannot be empty or have any special characters!${C_RESET}"
+                CLEAN_NAME="custom_backup[$(date +'%Y-%m-%d_%H-%M-%S')]"
+            fi
+            archive_name="${CLEAN_NAME}.7z"
             ;;
         4)
             archive_name="Apps-backup[$(date +'%Y-%m-%d_%H-%M-%S')].7z"
@@ -1893,35 +1898,80 @@ volume_smart_backup_main() {
         archive_path="$(dirname "$backup_dir")/${archive_name}"
     fi
 
+# Split Selection with Size Validation
     local archive_split_opt=""
-    local total_size
-    total_size=$(du -sb "$backup_dir" | awk '{print $1}')
-    
-    echo -e "\n${C_YELLOW}Backup size is $(numfmt --to=iec-i --suffix=B "$total_size"). Select splitting option:${C_RESET}"
-    echo "  1) No splitting"
-    echo "  2) Split at 4GB (FAT32 compatible)"
-    echo "  3) Split at 8GB (DVD DL)"
-    echo "  4) Custom size (MB or GB)"
-    
+    local backup_size_bytes
+    backup_size_bytes=$(du -sb "$backup_dir" | cut -f1)
+
     while true; do
-        read -rp "${C_YELLOW}Enter choice [${C_RESET}1${C_YELLOW}-${C_RESET}4${C_YELLOW}]: ${C_RESET}" split_choice
+        echo -e "\n${C_YELLOW}--- Archive Splitting ---${C_RESET}"
+        echo -e " 1) No split"
+        echo -e " 2) Split at 700MB ${C_GRAY}(CD safe)${C_RESET}"
+        echo -e " 3) Split at 4GB ${C_GRAY}(FAT32 safe)${C_RESET}"
+        echo -e " 4) Split at 8GB"
+        echo -e " 5) Split at 16GB"
+        echo -e " c) Custom split size (e.g., 500m, 2g, 1024k)"
+        echo -e " r) ${C_GRAY}Return to naming selection${C_RESET}"
+        echo -e "\n${C_CYAN}Current backup size: ${C_GREEN}$(numfmt --to=iec-i --suffix=B "$backup_size_bytes")${C_RESET}"
+        read -rp "${C_YELLOW}Enter choice${C_RESET}: " split_choice
+
+        local selected_size_bytes=0
+        local split_str=""
+
         case "$split_choice" in
             1) archive_split_opt=""; break ;;
-            2) archive_split_opt="-v4095m"; echo -e "${C_CYAN}-> Splitting at 4GB (FAT32 safe).${C_RESET}"; break ;;
-            3) archive_split_opt="-v8192m"; echo -e "${C_CYAN}-> Splitting at 8GB.${C_RESET}"; break ;;
-            4) 
-                read -rp "${C_YELLOW}Enter size (e.g., ${C_RESET}500m ${C_YELLOW}or ${C_RESET}2g${C_YELLOW}): ${C_RESET}" custom_size
-                if [[ "$custom_size" =~ ^[0-9]+[mMgG]$ ]]; then
-                    local safe_size="${custom_size,,}"
-                    archive_split_opt="-v${safe_size}"
-                    echo -e "${C_CYAN}-> Splitting at ${C_GREEN}${safe_size}${C_CYAN} (Binary units).${C_RESET}"
-                    break
+            2) split_str="700m";  selected_size_bytes=$((700 * 1024 * 1024)) ;;
+            3) split_str="4095m"; selected_size_bytes=$((4095 * 1024 * 1024)) ;;
+            4) split_str="8192m"; selected_size_bytes=$((8192 * 1024 * 1024)) ;;
+            5) split_str="16384m"; selected_size_bytes=$((16384 * 1024 * 1024)) ;;
+            c|C) 
+                read -rp "${C_YELLOW}Enter size (e.g., 500m, 2g, 1024k): ${C_RESET}" custom_size
+                if [[ "$custom_size" =~ ^([0-9]+)([kKmMgG])$ ]]; then
+                    num="${BASH_REMATCH[1]}"
+                    unit="${BASH_REMATCH[2]}"
+                    unit_lc=$(echo "$unit" | tr '[:upper:]' '[:lower:]')
+                    split_str="${num}${unit_lc}"
+
+                    case "$unit_lc" in
+                        k) selected_size_bytes=$((num * 1024)) ;;
+                        m) selected_size_bytes=$((num * 1024 * 1024)) ;;
+                        g) selected_size_bytes=$((num * 1024 * 1024 * 1024)) ;;
+                    esac
                 else
-                    echo -e "${C_RED}Invalid format. Use numbers followed by M or G.${C_RESET}"
+                    echo -e "${C_RED}Invalid format!"
+                    echo -e "${C_YELLOW}Use numbers followed by (K)illobytes, (M)egabytes, or (G)igabytes.${C_RESET}"
+                    continue
                 fi
                 ;;
-            *) echo -e "${C_RED}Invalid option.${C_RESET}" ;;
+            r|R) return 1 ;;
+            *) echo -e "${C_RED}Invalid option.${C_RESET}"; continue ;;
         esac
+
+        # Validate if splitting is actually necessary
+        if [[ $selected_size_bytes -gt 0 ]]; then
+            if [[ $selected_size_bytes -ge $backup_size_bytes ]]; then
+                echo -e "\n${C_CYAN}NOTE: The selected split size (${C_GREEN}${split_str}${C_CYAN}) is LARGER than the total backup size.${C_RESET}"
+                echo -e "${C_GRAY}Applying a split in this case would result in a single file with a '.7z.001' extension.${C_RESET}"
+                echo
+                read -rp "${C_YELLOW}Continue WITHOUT splitting instead? ${C_RESET}(${C_GREEN}Y${C_RESET}/${C_GRAY}(${C_RESET}b)${C_GRAY})ack${C_RESET}/${C_RED}n${C_RESET}): " split_confirm
+                case "${split_confirm,,}" in
+                    y|yes|Y|YES|"") 
+                        archive_split_opt=""
+                        echo -e "${C_GREEN}-> Proceeding without split.${C_RESET}"
+                        break 
+                        ;;
+                    b|B|back|BACK) continue ;;
+                    n|N|no|NO) 
+                        archive_split_opt="-v${split_str}"
+                        echo -e "${C_YELLOW}-> Proceeding with split as requested.${C_RESET}"
+                        break 
+                        ;;
+                esac
+            else
+                archive_split_opt="-v${split_str}"
+                break
+            fi
+        fi
     done
 
     echo -e "\n${C_YELLOW}Creating secure 7z archive: ${C_GREEN}${archive_path}${C_RESET}"
