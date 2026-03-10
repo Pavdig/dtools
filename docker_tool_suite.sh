@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.5.4.7
+SCRIPT_VERSION=v1.5.4.8
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -632,7 +632,7 @@ initial_setup() {
     _prompt_input "Volume Backup Location"      "$backup_path_def"    BACKUP_LOCATION   "path"
     _prompt_input "Volume Restore Location"     "$restore_path_def"   RESTORE_LOCATION  "path"
     _prompt_input "Log Directory Path"          "$log_dir_def"        LOG_DIR           "path"
-    _prompt_input "Log file retention period (days, 0 to disable)" "$log_retention_def" LOG_RETENTION_DAYS "int" 0 3650
+    _prompt_input "Log file retention period in days. Set to 0 to disable automatic pruning." "$log_retention_def" LOG_RETENTION_DAYS "int" 0 3650
     
     local log_sub_update_def="apps-update-logs"
     local log_sub_unused_def="unused-images-update-logs"
@@ -2336,45 +2336,35 @@ prune_old_logs() {
 }
 
 _log_viewer_select_and_view() {
-    local less_prompt="(Scroll with arrow keys, press 'q' to return)"
     while true; do
-        clear
         mapfile -t log_files < <(find "$LOG_DIR" -name "*.log" -type f | sort -r)
-
+        
         if [ ${#log_files[@]} -eq 0 ]; then
             echo -e "${C_YELLOW}No log files found to view.${C_RESET}"; sleep 2; return
         fi
 
-        clear
-        echo "=============================================="
-        echo -e "          ${C_GREEN}${T_BOLD}Docker Tool Suite ${SCRIPT_VERSION}${C_RESET}"
-        echo "=============================================="
-        echo -e "           ${C_CYAN}--- Log Viewer ---"
-        echo -e "${C_RESET}----------------------------------------------\n"
-        echo -e "${C_YELLOW}Select a log file to view:${C_RESET}"
-        
-        local -a display_options=()
+        local -a options=()
         for file in "${log_files[@]}"; do
-            display_options+=("${C_GREEN}$(realpath --relative-to="$LOG_DIR" "$file")${C_RESET}")
+            options+=("$(realpath --relative-to="$LOG_DIR" "$file")")
         done
-        display_options+=("${C_GRAY}Return to Log Manager${C_RESET}")
-        
-        PS3=$'\n'"${C_YELLOW}Enter your choice: ${C_RESET}"
-        select choice in "${display_options[@]}"; do
-            if [[ "$choice" == "${C_GRAY}Return to Log Manager${C_RESET}" ]]; then
-                return
-            elif [[ -n "$choice" ]]; then
-                local idx=$((REPLY - 1))
-                echo -e "${C_RESET}----------------------------------------------"
-                echo -e "\n${C_CYAN}Opening log ${display_options[$idx]}"
-                echo -e "${C_RESET}----------------------------------------------\n"
-                echo -e "${C_GREEN}--- Log START ---${C_RESET}"
-                less -RX --prompt="$less_prompt" "${log_files[$idx]}"
-                break
-            else
-                echo -e "${C_RED}Invalid option. Please try again.${C_RESET}"; sleep 1; break
-            fi
-        done
+
+        print_standard_menu "Log Viewer" options "RQ"
+        read -erp "${C_YELLOW}Please select a log to view: ${C_RESET}" choice
+
+        # Handle Menu Selection
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#log_files[@]}" ]; then
+            local idx=$((choice-1))
+            clear
+            echo -e "${C_GREEN}--- Viewing Log: ${C_CYAN}$(basename "${log_files[$idx]}")${C_GREEN} ---${C_RESET}"
+            echo -e "${C_GRAY}(Press 'q' to return)${C_RESET}\n"
+            less -RX "${log_files[$idx]}"
+        elif [[ "${choice,,}" == "r" ]]; then
+            return
+        elif [[ "${choice,,}" == "q" ]]; then
+            exit 0
+        else
+            echo -e "\n${C_RED}Invalid option! Please try again.${C_RESET}"; sleep 1
+        fi
     done
 }
 
@@ -2392,29 +2382,31 @@ log_remover_main() {
     
     local -a files_to_delete=()
     for i in "${!log_files[@]}"; do if ${selected_status[$i]}; then files_to_delete+=("${log_files[$i]}"); fi; done
+    
     if [ ${#files_to_delete[@]} -eq 0 ]; then echo -e "\n${C_YELLOW}No logs selected.${C_RESET}"; sleep 1; return; fi
 
-    echo -e "\n${C_RED}You are about to permanently delete ${#files_to_delete[@]} log file(s).${C_RESET}"
-    read -rp "${C_YELLOW}Are you sure? [${C_RESET}Y${C_YELLOW}/${C_RESET}N${C_YELLOW}]: ${C_RESET}" confirm
+    echo -e "\n${C_RED}Permanently deleting ${#files_to_delete[@]} log file(s).${C_RESET}"
+    read -rp "${C_YELLOW}Are you sure? [${C_GREEN}y${C_YELLOW}/${C_RED}N${C_YELLOW}]: ${C_RESET}" confirm
     if [[ ! "${confirm,,}" =~ ^(y|Y|yes|YES)$ ]]; then echo -e "${C_RED}Deletion canceled.${C_RESET}"; sleep 1; return; fi
     
     echo ""
     for file in "${files_to_delete[@]}"; do
         if rm "$file"; then
-            log "Deleted log file: $file" "-> Deleted ${C_CYAN}$(basename "$file")${C_RESET}"
+            echo -e "-> ${C_GREEN}Deleted ${C_CYAN}$(basename "$file")${C_RESET}"
+            log "Deleted log file: $file"
         else
-            log "ERROR: Failed to delete log file: $file" "-> ${C_RED}Failed to delete $(basename "$file")${C_RESET}"
+            echo -e "-> ${C_RED}Failed to delete $(basename "$file")${C_RESET}"
+            log "ERROR: Failed to delete log file: $file"
         fi
     done
-    echo -e "\n${C_GREEN}Deletion complete.${C_RESET}"
+    echo -e "\n${C_GREEN}${TICKMARK} Operation complete.${C_RESET}"; sleep 1
 }
 
 log_manager_configure_retention() {
     clear
-    echo -e "${C_YELLOW} --- Configure Log Retention ---${C_RESET}\n"
-    # Added Limits: Min 0, Max 3650 (10 years)
-    _update_config_value "LOG_RETENTION_DAYS" "Log file retention period (days, 0 to disable)" "${LOG_RETENTION_DAYS:-30}" "30" "int" "0" "3650"
-    echo -e "\n${C_GREEN}Retention policy updated.${C_RESET}"
+    echo -e "${C_GREEN}--- Configure Log Retention ---${C_RESET}\n"
+    _update_config_value "LOG_RETENTION_DAYS" "Log file retention period in days. Set to 0 to disable automatic pruning." "${LOG_RETENTION_DAYS:-30}" "30" "int" "0" "3650"
+    echo -e "\n${C_GREEN}${TICKMARK} Retention policy updated.${C_RESET}"; sleep 1
 }
 
 log_manager_menu() {
@@ -2987,7 +2979,8 @@ _update_config_value() {
 
     if [[ -n "$default_value" ]]; then
         if [[ "$current_value" != "$default_value" ]]; then
-             echo -e "${C_GRAY}Default: ${default_value} (Type '${C_RESET}reset${C_GRAY}' to restore)${C_RESET}"
+            echo -e "${C_YELLOW}Current: ${C_CYAN}${current_value} ${C_YELLOW}days.${C_RESET}"
+            echo -e "${C_GRAY}Type '${C_CYAN}reset${C_GRAY}' to restore default value: ${C_CYAN}${default_value} ${C_GRAY}days. ${C_RESET}\n"
         fi
     fi
 
