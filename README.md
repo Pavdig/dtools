@@ -1,6 +1,6 @@
 ![Docker](https://img.shields.io/badge/Manages-Docker-2496ED?logo=docker&logoColor=white)
 ![Shell](https://img.shields.io/badge/Shell-BASH%20%2F%20ZSH-4EAA25?logo=gnu-bash&logoColor=white)
-[![Version](https://img.shields.io/badge/version-v1.5.5-blue)](https://github.com/Pavdig/dtools)
+[![Version](https://img.shields.io/badge/version-v1.5.6-blue)](https://github.com/Pavdig/dtools)
 [![GitHub last commit](https://img.shields.io/github/last-commit/Pavdig/dtools)](https://github.com/Pavdig/dtools/commits/main)
 [![GitHub repo size](https://img.shields.io/github/repo-size/Pavdig/dtools)](https://github.com/Pavdig/dtools)
 [![License](https://img.shields.io/github/license/Pavdig/dtools)](https://github.com/Pavdig/dtools/blob/main/LICENSE)
