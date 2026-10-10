@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.5.4.8
+SCRIPT_VERSION=v1.5.4.9
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -86,27 +86,112 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # --- Config Loader ---
+# The config file is parsed as DATA. It is never sourced or evaluated, so nothing
+# inside it can run as code (this script usually runs as root via sudo, while the
+# config file lives in the user's home).
+# Only the keys listed here are accepted. Unknown keys are skipped with a warning.
+CONFIG_SCALAR_KEYS=" APPS_BASE_PATH MANAGED_SUBDIR BACKUP_LOCATION RESTORE_LOCATION BACKUP_IMAGE EXPLORE_IMAGE ENCRYPTED_ARCHIVE_PASSWORD ARCHIVE_COMPRESSION_LEVEL LOG_DIR LOG_SUBDIR_UPDATE LOG_SUBDIR_UNUSED LOG_RETENTION_DAYS "
+CONFIG_ARRAY_KEYS=" IGNORED_VOLUMES IGNORED_IMAGES "
+
+_config_fail() {
+    echo -e "${C_RED}SECURITY ERROR: $1 Aborting.${C_RESET}"
+    exit 1
+}
+
+# Values are stored literally and never expanded, so reject anything that looks like shell syntax.
+_config_check_value() {
+    local value="$1" key="$2"
+    if [[ "$value" == *[\`\$\;\|\&\\]* ]]; then
+        _config_fail "Config value for '${key}' contains a forbidden character (\` \$ ; | & \\)."
+    fi
+}
+
+# Assigns a global array by name (the name was already checked against CONFIG_ARRAY_KEYS).
+_config_set_array() {
+    local -n _cfg_dst="$1"
+    shift
+    _cfg_dst=("$@")
+}
+
 load_config() {
     local cfg_file="$1"
-    tmp_log=$(mktemp) 
-    
     if [[ ! -f "$cfg_file" ]]; then return 1; fi
-    
-    # Filter using the new variable name
-    grep -E '^\s*(#|$)|^[A-Z_]+=".*"$|^[A-Z_]+='"'.*'"'$|^[A-Z_]+=[a-zA-Z0-9/+=._-]+$|^[A-Z_]+=\($|^\s*"[^"]+"$|^\)$' "$cfg_file" > "$tmp_log" || true
 
-    # Security check using the new variable name
-    if grep -qE '`|\$\(|;|\||&' "$tmp_log"; then
-        echo -e "${C_RED}SECURITY ERROR: Config file contains executable code indicators! Aborting.${C_RESET}"
-        rm -f "$tmp_log"
-        tmp_log=""
-        exit 1
+    local re_blank='^[[:space:]]*(#.*)?$'
+    local re_assign='^[[:space:]]*([A-Z_]+)=(.*)$'
+    local re_arr_open='^[[:space:]]*([A-Z_]+)=\([[:space:]]*$'
+    local re_arr_close='^[[:space:]]*\)[[:space:]]*$'
+    local re_item='^[[:space:]]*"([^"]*)"[[:space:]]*$'
+    local re_dq='^"([^"]*)"$'
+    local re_sq="^'([^']*)'\$"
+    local re_bare='^[A-Za-z0-9/+=._:@-]*$'
+
+    local line key val item
+    local arr_key="" arr_known=false
+    local -a arr_items=()
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%$'\r'}"
+
+        # Inside a list: only quoted items, blank lines, comments, or the closing ")" are allowed.
+        if [[ -n "$arr_key" ]]; then
+            if [[ "$line" =~ $re_arr_close ]]; then
+                if $arr_known; then
+                    _config_set_array "$arr_key" ${arr_items[@]+"${arr_items[@]}"}
+                fi
+                arr_key=""; arr_known=false; arr_items=()
+            elif [[ "$line" =~ $re_blank ]]; then
+                :
+            elif [[ "$line" =~ $re_item ]]; then
+                item="${BASH_REMATCH[1]}"
+                _config_check_value "$item" "$arr_key"
+                arr_items+=("$item")
+            else
+                _config_fail "Malformed entry inside list '${arr_key}'."
+            fi
+            continue
+        fi
+
+        if [[ "$line" =~ $re_blank ]]; then continue; fi
+
+        if [[ "$line" =~ $re_arr_open ]]; then
+            arr_key="${BASH_REMATCH[1]}"
+            arr_items=()
+            if [[ "$CONFIG_ARRAY_KEYS" == *" $arr_key "* ]]; then
+                arr_known=true
+            else
+                arr_known=false
+                echo -e "${C_YELLOW}Warning: Ignoring unknown config list '${arr_key}'.${C_RESET}"
+            fi
+            continue
+        fi
+
+        if [[ "$line" =~ $re_assign ]]; then
+            key="${BASH_REMATCH[1]}"
+            val="${BASH_REMATCH[2]}"
+            if [[ "$CONFIG_SCALAR_KEYS" != *" $key "* ]]; then
+                echo -e "${C_YELLOW}Warning: Ignoring unknown config key '${key}'.${C_RESET}"
+                continue
+            fi
+            if [[ "$val" =~ $re_dq ]]; then
+                val="${BASH_REMATCH[1]}"
+            elif [[ "$val" =~ $re_sq ]]; then
+                val="${BASH_REMATCH[1]}"
+            elif [[ ! "$val" =~ $re_bare ]]; then
+                _config_fail "Unsupported value syntax for '${key}'."
+            fi
+            _config_check_value "$val" "$key"
+            printf -v "$key" '%s' "$val"
+            continue
+        fi
+
+        echo -e "${C_YELLOW}Warning: Ignoring unrecognised line in config file.${C_RESET}"
+    done < "$cfg_file"
+
+    if [[ -n "$arr_key" ]]; then
+        _config_fail "List '${arr_key}' is missing its closing parenthesis."
     fi
-
-    # Source and clean up
-    . "$tmp_log"
-    rm -f "$tmp_log"
-    tmp_log=""
+    return 0
 }
 
 validate_loaded_config() {
@@ -127,7 +212,7 @@ validate_loaded_config() {
     fi
 
     # Validate Paths (Basic check to ensure they aren't empty)
-    if [[ -z "${APPS_BASE_PATH}" ]]; then APPS_BASE_PATH="/home/${CURRENT_USER}/apps"; fi
+    if [[ -z "${APPS_BASE_PATH}" ]]; then APPS_BASE_PATH="/home/${CURRENT_USER}/docker-apps"; fi
     if [[ -z "${BACKUP_LOCATION}" ]]; then BACKUP_LOCATION="/home/${CURRENT_USER}/backups"; fi
 }
 
@@ -616,7 +701,7 @@ initial_setup() {
     echo -e "\n${C_YELLOW}This one-time setup will configure all modules.\n"
     echo -e "${C_RESET}Settings will be saved to: ${C_GREEN}${CONFIG_FILE}${C_RESET}\n"
 
-    local apps_path_def="/home/${CURRENT_USER}/apps"
+    local apps_path_def="/home/${CURRENT_USER}/docker-apps"
     local managed_subdir_def="managed_stacks"
     local backup_path_def="/home/${CURRENT_USER}/backups/docker-volume-backups"
     local restore_path_def="/home/${CURRENT_USER}/backups/docker-volume-backups"
@@ -740,9 +825,9 @@ initial_setup() {
         if [ ${#selected_ignored_volumes[@]} -gt 0 ]; then
             printf "\n"; for vol in "${selected_ignored_volumes[@]}"; do echo "    \"$vol\""; done
         else
-            printf "\n"; echo "    \"example-of-ignored_volume-1\""
-            printf ""; echo "    \"example-of-ignored_volume-2\""
-            printf ""; echo "    \"example-of-ignored_volume-3\""
+            printf "\n"; echo "    # \"example-of-ignored_volume-1\""
+            printf ""; echo "    # \"example-of-ignored_volume-2\""
+            printf ""; echo "    # \"example-of-ignored_volume-3\""
         fi
         echo ")"
         echo
@@ -751,9 +836,9 @@ initial_setup() {
         if [ ${#selected_ignored_images[@]} -gt 0 ]; then
             printf "\n"; for img in "${selected_ignored_images[@]}"; do echo "    \"$img\""; done
         else
-            printf "\n"; echo "    \"custom-registry/my-custom-app-1:latest\""
-            printf ""; echo "    \"custom-registry/my-custom-app-2:latest\""
-            printf ""; echo "    \"custom-registry/my-custom-app-3:latest\""
+            printf "\n"; echo "    # \"custom-registry/my-custom-app-1:latest\""
+            printf ""; echo "    # \"custom-registry/my-custom-app-2:latest\""
+            printf ""; echo "    # \"custom-registry/my-custom-app-3:latest\""
         fi
         echo ")"
         echo
@@ -3125,7 +3210,7 @@ update_ignored_items() {
 }
 
 settings_manager_menu() {
-    local apps_path_def="/home/${CURRENT_USER}/apps"
+    local apps_path_def="/home/${CURRENT_USER}/docker-apps"
     local managed_subdir_def="managed_stacks"
     local backup_path_def="/home/${CURRENT_USER}/backups/docker-volume-backups"
     local restore_path_def="/home/${CURRENT_USER}/backups/docker-volume-backups"
