@@ -3,7 +3,7 @@
 # --- Docker Tool Suite ---
 # =========================
 
-SCRIPT_VERSION=v1.5.4.9
+SCRIPT_VERSION=v1.5.5
 
 # --- Strict Mode & Globals ---
 set -euo pipefail
@@ -2073,16 +2073,22 @@ volume_smart_backup_main() {
     sevenz_cmd+=("-mx=${ARCHIVE_COMPRESSION_LEVEL:-3}" "-y")
 
     if [[ -n "$archive_password" ]]; then
-        # -mhe=on encrypts headers (filenames)
-        sevenz_cmd+=("-mhe=on" "-p${archive_password}")
+        # -mhe=on encrypts headers (filenames).
+        # A bare -p makes 7z prompt for the password, which is fed through stdin below.
+        # It is never put on the command line, where "ps" would show it.
+        sevenz_cmd+=("-mhe=on" "-p")
     fi
     
     sevenz_cmd+=("--" "${archive_path}" "${backup_dir}")
 
     log "Creating 7z archive: $(basename "${archive_path}")"
     
-    # Execute
-    "${sevenz_cmd[@]}" &> "$archive_log"
+    # Execute (7z asks for the password twice when creating an archive, so it is sent twice)
+    if [[ -n "$archive_password" ]]; then
+        printf '%s\n%s\n' "$archive_password" "$archive_password" | "${sevenz_cmd[@]}" &> "$archive_log"
+    else
+        "${sevenz_cmd[@]}" &> "$archive_log"
+    fi
     local run_exit_code=$?  # Capture the exit code here
 
     while IFS= read -r line || [ -n "$line" ]; do
